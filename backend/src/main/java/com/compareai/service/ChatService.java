@@ -8,11 +8,14 @@ import com.compareai.dto.ai.AiMessage;
 import com.compareai.dto.ai.AiRequest;
 import com.compareai.dto.response.AIResponse;
 import com.compareai.entity.AiProvider;
+import com.compareai.entity.Conversation;
+import com.compareai.entity.Message;
 import com.compareai.enums.Role;
 import com.compareai.repository.ConversationRepository;
 import com.compareai.repository.MessageRepository;
 import org.springframework.stereotype.Service;
 import java.util.concurrent.Executor;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -30,7 +33,7 @@ public class ChatService {
     public ChatService(ConversationRepository conversationRepository,
                        MessageRepository messageRepository,
                        List<AiClient> aiClients,
-                       Executor taskExecutor) {
+                       @Qualifier("taskExecutor") Executor taskExecutor) {
 
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
@@ -46,7 +49,21 @@ public class ChatService {
     public List<AIResponse> sendMessage(String prompt) {
 
         List<AIResponse> responses = new ArrayList<>();
+        Conversation conversation = new Conversation();
 
+        conversation.setTitle(prompt);
+
+        Conversation savedConversation =
+                conversationRepository.save(conversation);
+
+        Message userMessage = new Message();
+
+        userMessage.setConversation(conversation);
+        userMessage.setRole(Role.USER);
+        userMessage.setContent(prompt);
+        userMessage.setSelected(false);
+
+        messageRepository.save(userMessage);
         AiRequest request = AiRequest.builder()
                 .messages(List.of(
                         AiMessage.builder()
@@ -62,6 +79,16 @@ public class ChatService {
                                 CompletableFuture.supplyAsync(() -> {
 
                                     AiClientResponse clientResponse = client.sendPrompt(request);
+
+                                    Message aiMessage = new Message();
+                                    aiMessage.setConversation(conversation);
+                                    aiMessage.setParentMessage(userMessage);
+                                    aiMessage.setRole(Role.ASSISTANT);
+                                    aiMessage.setAiProvider(client.getProvider());
+                                    aiMessage.setContent(clientResponse.getContent());
+                                    aiMessage.setSelected(false);
+
+                                    messageRepository.save(aiMessage);
 
                                     return AIResponse.builder()
                                             .provider(client.getProvider())
