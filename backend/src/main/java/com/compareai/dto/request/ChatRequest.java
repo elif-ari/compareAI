@@ -16,6 +16,11 @@ public class ChatRequest {
     // İlk mesaj ise null olabilir.
     private Long parentMessageId;
 
+    // true  -> üst orta bar: hangi daldan devam ediliyorsa edilsin, 3 sağlayıcıya BİRDEN sor (yeni karşılaştırma turu)
+    // false -> bir AI konteynerinin kendi mini bar'ı: SADECE o dalın sağlayıcısına sor
+    // null/gönderilmezse -> eski davranış: parent bir ASSISTANT mesajıysa tek sağlayıcı, değilse 3'ü de
+    private Boolean askAllProviders;
+
     @NotBlank
     private String prompt;
 }

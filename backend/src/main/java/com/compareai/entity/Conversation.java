@@ -26,6 +26,11 @@ public class Conversation {
     @Column(nullable = false, length = 255)
     private String title;
 
+    // Git'teki HEAD gibi: kullanıcının şu an konuşmada bulunduğu dalın ucundaki mesaj.
+    // Yeni konuşmada henüz mesaj yokken null olur.
+    @Column(name = "current_message_id")
+    private Long currentMessageId;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

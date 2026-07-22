@@ -45,10 +45,6 @@ public class Message {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
-    // Kullanıcının "bu cevapla devam et" dediği AI mesajı.
-    @Column(nullable = false)
-    private boolean selected = false;
-
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

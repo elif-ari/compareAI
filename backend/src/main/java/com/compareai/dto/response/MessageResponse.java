@@ -12,6 +12,9 @@ public class MessageResponse {
 
     private Long id;
 
+    // Bu mesaj hangi mesajın devamı? Ağacın kökündeki mesajda null olur.
+    private Long parentMessageId;
+
     private String role;
 
     private String provider;

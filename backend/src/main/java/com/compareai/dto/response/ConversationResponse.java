@@ -14,6 +14,11 @@ public class ConversationResponse {
 
     private String title;
 
+    // Konuşmanın şu anki HEAD'i - frontend hangi dalın "aktif" gösterileceğini buradan anlar
+    private Long currentMessageId;
+
+    // Konuşmadaki TÜM mesajlar (tüm dallar dahil), her biri parentMessageId taşır.
+    // Frontend bu düz listeden ağacı kurar.
     private List<MessageResponse> messages;
 
 }
