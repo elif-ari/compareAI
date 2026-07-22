@@ -29,7 +29,7 @@ public class MockOpenAiClient implements AiClient {
 
     private void simulateNetworkDelay() {
         try {
-            Thread.sleep(1500);
+            Thread.sleep(5000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

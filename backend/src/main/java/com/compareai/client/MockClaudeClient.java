@@ -29,7 +29,7 @@ public class MockClaudeClient implements AiClient {
 
     private void simulateNetworkDelay() {
         try {
-            Thread.sleep(1000);
+            Thread.sleep(2000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
