@@ -1,0 +1,28 @@
+# ==== Backend (Java / Maven / IntelliJ) ====
+backend/target/
+backend/.mvn/
+backend/mvnw
+backend/mvnw.cmd
+*.class
+*.jar
+*.war
+
+# IntelliJ
+.idea/
+*.iml
+*.iws
+out/
+
+# ==== Frontend (React / Node) ====
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.env
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# ==== Ortak ====
+.env
+.DS_Store
+*.log

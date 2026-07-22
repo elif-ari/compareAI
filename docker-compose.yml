@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: compareai-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: Ee123!
+      MYSQL_DATABASE: compareai_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - compareai_mysql_data:/var/lib/mysql
+
+volumes:
+  compareai_mysql_data:
