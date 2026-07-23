@@ -4,12 +4,9 @@ import com.compareai.dto.request.ChatRequest;
 import com.compareai.dto.request.SelectMessageRequest;
 import com.compareai.dto.response.ChatResponse;
 import com.compareai.dto.response.ConversationResponse;
-import com.compareai.dto.response.ConversationSummaryResponse;
 import com.compareai.service.ChatService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/chat")
@@ -28,12 +25,6 @@ public class ChatController {
     @PostMapping
     public ChatResponse sendMessage(@Valid @RequestBody ChatRequest request) {
         return chatService.sendMessage(request);
-    }
-
-    // Sol menüdeki "geçmiş konuşmalar" listesi.
-    @GetMapping("/conversations")
-    public List<ConversationSummaryResponse> getConversations() {
-        return chatService.getAllConversations();
     }
 
     // Bir konuşmanın TÜM dallarıyla birlikte tam halini getirir (aynı konuşmaya devam ederken kullanılır).

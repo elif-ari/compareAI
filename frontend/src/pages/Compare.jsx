@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Send, MessageSquare, Loader2, Plus, Settings2, LogOut, Clock } from "lucide-react";
+import { Send, Loader2, Plus, Settings2, LogOut, Clock, Radio, X } from "lucide-react";
 import axios from "axios";
 import { getProviderById, CARD_PALETTE } from "../data/aiCatalog";
 import { useSelection } from "../context/SelectionContext";
@@ -17,26 +17,21 @@ const Compare = () => {
 
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [conversations, setConversations] = useState([]);
 
   // Aktif konuşma durumu
   const [conversationId, setConversationId] = useState(null);
   const [messages, setMessages] = useState([]); // bu konuşmaya ait tüm mesajlar (backend'den düz liste)
   const [headId, setHeadId] = useState(null); // conversation.currentMessageId (HEAD)
-  const [activeBranchProvider, setActiveBranchProvider] = useState(null); // en son "X ile devam et" seçilen sağlayıcı
 
-  const fetchConversations = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/conversations`);
-      setConversations(res.data);
-    } catch (error) {
-      console.error("Geçmiş sohbetler çekilemedi:", error);
-    }
-  };
+  // activeBranchProvider set edildiyse: kullanıcı "X ile devam et" demiş demektir.
+  // Bu durumda üstteki kutudan gönderilen bir sonraki mesaj SADECE o sağlayıcıya gider
+  // (backend'e askAllProviders:false gönderilir). "Tümüne dön" ile bu mod kapatılır.
+  const [activeBranchProvider, setActiveBranchProvider] = useState(null);
 
-  useEffect(() => {
-    fetchConversations();
-  }, []);
+  const activeBranchDefinition = useMemo(
+    () => providers.find((p) => p.backendProvider === activeBranchProvider),
+    [providers, activeBranchProvider]
+  );
 
   // Şu anki HEAD'e göre gösterilecek "tur"u (son kullanıcı mesajı + ona bağlı AI cevapları) hesapla.
   const currentTurn = useMemo(() => {
@@ -64,31 +59,23 @@ const Compare = () => {
     [currentTurn]
   );
 
+  // Bir sağlayıcının konuşma boyunca verdiği EN SON cevabı bul (sadece bu turdaki değil).
+  // "X ile devam et" bu mesajı HEAD yapar, böylece o sağlayıcının kendi dalında kaldığı yerden devam edilir.
+  const getLatestMessageForProvider = useCallback(
+    (backendProvider) => {
+      const own = messages.filter((m) => m.role === "ASSISTANT" && m.provider === backendProvider);
+      if (own.length === 0) return null;
+      return own.reduce((latest, m) => (m.id > latest.id ? m : latest), own[0]);
+    },
+    [messages]
+  );
+
   const startNewChat = () => {
     setConversationId(null);
     setMessages([]);
     setHeadId(null);
     setActiveBranchProvider(null);
     setInputText("");
-  };
-
-  const loadConversation = async (id) => {
-    try {
-      setIsLoading(true);
-      const res = await axios.get(`${API_BASE}/conversations/${id}`);
-      setConversationId(res.data.id);
-      setMessages(res.data.messages);
-      setHeadId(res.data.currentMessageId);
-
-      const byId = new Map(res.data.messages.map((m) => [m.id, m]));
-      const head = byId.get(res.data.currentMessageId);
-      setActiveBranchProvider(head && head.role === "ASSISTANT" ? head.provider : null);
-    } catch (error) {
-      console.error("Konuşma yüklenemedi:", error);
-      alert("Bu konuşma yüklenemedi. Konsolu kontrol et.");
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   const handleSendMessage = async () => {
@@ -102,9 +89,13 @@ const Compare = () => {
       // conversationId varsa gönderiyoruz ki backend AYNI konuşmaya devam etsin
       // (parentMessageId göndermiyoruz: backend, boş bırakılırsa otomatik olarak
       // konuşmanın HEAD'inden devam ediyor - bkz. ChatService.resolveParentMessage).
+      //
+      // activeBranchProvider set edildiyse (bir kart için "devam et" tıklanmışsa)
+      // SADECE o sağlayıcıya sorulur (askAllProviders:false); backend HEAD'in bir
+      // ASSISTANT mesajı olmasını bekleyip o mesajın sağlayıcısına yönlendirir.
       const payload = {
         prompt: messageToSend,
-        askAllProviders: true,
+        askAllProviders: activeBranchProvider === null,
       };
       if (conversationId) payload.conversationId = conversationId;
 
@@ -114,9 +105,8 @@ const Compare = () => {
       setConversationId(newConvId);
       setMessages((prev) => [...prev, userMessage, ...aiResponses]);
       setHeadId(currentMessageId);
-      setActiveBranchProvider(null);
-
-      fetchConversations();
+      // activeBranchProvider bilerek SIFIRLANMIYOR: tek-sağlayıcı modundaysak
+      // bir sonraki mesaj da varsayılan olarak aynı sağlayıcıya gitmeye devam etsin.
     } catch (error) {
       console.error("Backend hatası:", error);
       alert("Backend'e ulaşılamadı veya bir hata oluştu. Konsolu kontrol et.");
@@ -126,15 +116,15 @@ const Compare = () => {
   };
 
   const handleContinueWith = async (backendProvider) => {
-    const selectedAiMessage = getAiMessage(backendProvider);
-    if (!selectedAiMessage || !conversationId) {
+    const latestMessage = getLatestMessageForProvider(backendProvider);
+    if (!latestMessage || !conversationId) {
       alert("Bu sağlayıcıdan henüz bir cevap yok.");
       return;
     }
 
     try {
       const res = await axios.post(`${API_BASE}/conversations/${conversationId}/select`, {
-        messageId: selectedAiMessage.id,
+        messageId: latestMessage.id,
       });
       setHeadId(res.data.currentMessageId);
       setActiveBranchProvider(backendProvider);
@@ -142,6 +132,10 @@ const Compare = () => {
       console.error("Dal seçimi başarısız:", error);
       alert("Bu daldan devam edilemedi. Konsolu kontrol et.");
     }
+  };
+
+  const handleReturnToBroadcast = () => {
+    setActiveBranchProvider(null);
   };
 
   const handleKeyDown = (e) => {
@@ -152,56 +146,51 @@ const Compare = () => {
   };
 
   return (
-    <div className="app-container">
-      {/* Sidebar */}
-      <div className="sidebar">
-        <div className="sidebar-header">
-          <span>CompareAI</span>
+    <div className="compare-page">
+      <header className="header">
+        <div className="header-left">
+          <span className="header-brand">CompareAI</span>
+          <span className="header-divider">·</span>
+          <span>
+            <strong>{providers.length}</strong> model seçili
+          </span>
           <button className="icon-btn" onClick={startNewChat} title="Yeni sohbet">
             <Plus size={16} />
           </button>
         </div>
-        <div className="sidebar-history">
-          <div className="history-title">Geçmiş Sohbetler</div>
-          {conversations.length === 0 ? (
-            <div style={{ padding: "10px", fontSize: "0.85rem", color: "#94a3b8" }}>Henüz sohbet yok.</div>
-          ) : (
-            conversations.map((conv) => (
-              <button
-                key={conv.id}
-                className={`history-item ${conv.id === conversationId ? "active" : ""}`}
-                onClick={() => loadConversation(conv.id)}
-              >
-                <MessageSquare size={14} style={{ marginRight: "8px", flexShrink: 0 }} />
-                <span className="history-item-label">{conv.title || `Sohbet #${conv.id}`}</span>
-              </button>
-            ))
-          )}
-        </div>
-        <div className="sidebar-footer">
-          <div className="sidebar-user">{user?.name}</div>
+        <div className="header-right">
+          <span className="setup-user">{user?.name}</span>
+          <button className="header-edit-btn" onClick={() => navigate("/select")}>
+            <Settings2 size={14} /> Seçimi düzenle
+          </button>
           <button className="icon-btn" onClick={logout} title="Çıkış yap">
             <LogOut size={16} />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Ana Ekran */}
       <div className="main-content">
-        <header className="header">
-          <span>
-            Yapay zekaları karşılaştır · <strong>{providers.length}</strong> model seçili
-          </span>
-          <button className="header-edit-btn" onClick={() => navigate("/select")}>
-            <Settings2 size={14} /> Seçimi düzenle
-          </button>
-        </header>
-
         <div className="input-section">
+          {activeBranchDefinition && (
+            <div className="branch-banner">
+              <Radio size={14} />
+              <span>
+                Şu an yalnızca <strong>{activeBranchDefinition.name}</strong> ile konuşuyorsun.
+                Diğerleri bu turdaki soruyu görmeyecek.
+              </span>
+              <button className="branch-banner-close" onClick={handleReturnToBroadcast}>
+                <X size={13} /> Tümüne dön
+              </button>
+            </div>
+          )}
           <div className="input-box">
             <textarea
               rows="1"
-              placeholder="Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
+              placeholder={
+                activeBranchDefinition
+                  ? `${activeBranchDefinition.name} ile devam et... (Enter ile gönder)`
+                  : "Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
+              }
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -218,13 +207,15 @@ const Compare = () => {
           {providers.map((provider, index) => {
             const palette = CARD_PALETTE[index % CARD_PALETTE.length];
             const isActiveBranch = activeBranchProvider === provider.backendProvider;
+            const isMutedThisTurn = activeBranchProvider !== null && !isActiveBranch;
 
             if (provider.functional) {
               const aiMessage = getAiMessage(provider.backendProvider);
+              const hasAnyHistory = !!getLatestMessageForProvider(provider.backendProvider);
               return (
                 <div
                   key={provider.id}
-                  className={`ai-card ${isActiveBranch ? "active-branch" : ""}`}
+                  className={`ai-card ${isActiveBranch ? "active-branch" : ""} ${isMutedThisTurn ? "muted-card" : ""}`}
                   style={{ "--card-color": palette.bg, "--card-border": palette.border, "--card-text": palette.text }}
                 >
                   <div className="card-header">
@@ -244,6 +235,8 @@ const Compare = () => {
                       ? "Mesajınızı bekliyor..."
                       : aiMessage
                       ? aiMessage.content
+                      : isMutedThisTurn
+                      ? `Bu turda soru sorulmadı (şu an yalnızca ${activeBranchDefinition?.name} ile konuşuluyor).`
                       : "Cevap alınamadı."}
                   </div>
                   <div className="card-footer">
@@ -251,9 +244,9 @@ const Compare = () => {
                       className="continue-btn"
                       style={{ color: palette.text, borderColor: palette.border }}
                       onClick={() => handleContinueWith(provider.backendProvider)}
-                      disabled={!aiMessage}
+                      disabled={!hasAnyHistory || isActiveBranch}
                     >
-                      {provider.name} ile devam et →
+                      {isActiveBranch ? "Şu an bu sağlayıcıdasın" : `${provider.name} ile devam et →`}
                     </button>
                   </div>
                 </div>

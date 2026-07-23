@@ -41,6 +41,14 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Parola hash'lemek icin (BCrypt). BILINCLI OLARAK spring-boot-starter-security DEGIL:
+             o tum starter, otomatik bir filtre zinciri kurup butun endpoint'leri login arkasina kilitler,
+             mevcut acik (auth'suz) chat endpoint'lerini bozar. Sadece hash utility'sini kullaniyoruz. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
         <!-- Validation (DTO dogrulama icin) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

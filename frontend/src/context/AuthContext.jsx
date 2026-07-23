@@ -1,37 +1,18 @@
 import { createContext, useContext, useState, useCallback } from "react";
+import axios from "axios";
 
-// NOT: Backend'de bir auth servisi olmadığı için (istenen kapsam dışı),
-// bu context tarayıcı localStorage üzerinde çalışan basit bir demo
-// kayıt/giriş sistemidir. Amaç: kullanıcı akışını (kayıt -> giriş ->
-// AI seçimi -> API key -> karşılaştırma) uçtan uca göstermek.
-// Gerçek bir üretim ortamında bu kısım backend'deki bir /auth servisine bağlanmalıdır.
+// Kayıt/giriş artık backend'e (MySQL'deki app_users tablosuna) bağlı.
+// Oturum bilgisi (aktif kullanıcı) yalnızca "hangi kullanıcı olarak
+// tarayıcıdasın" bilgisini hatırlamak için localStorage'da tutulur;
+// parola hiçbir zaman burada saklanmaz, backend'de BCrypt ile hash'lenir.
 
-const USERS_KEY = "compareai_users";
+const API_BASE = "http://localhost:8080/api/auth";
 const SESSION_KEY = "compareai_session";
 
 const AuthContext = createContext(null);
 
-// Basit, tersine çevrilemeyen olmayan bir "hash" - sadece localStorage'da
-// düz metin parola tutmamak için. Gerçek şifreleme değildir.
-function simpleHash(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return String(hash);
-}
-
-function loadUsers() {
-  try {
-    return JSON.parse(localStorage.getItem(USERS_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function saveUsers(users) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+function extractErrorMessage(error, fallback) {
+  return error?.response?.data?.message || fallback;
 }
 
 export const AuthProvider = ({ children }) => {
@@ -43,38 +24,26 @@ export const AuthProvider = ({ children }) => {
     }
   });
 
-  const register = useCallback((name, email, password) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    if (!name.trim() || !normalizedEmail || !password) {
-      throw new Error("Lütfen tüm alanları doldurun.");
+  const register = useCallback(async (name, email, password) => {
+    try {
+      const res = await axios.post(`${API_BASE}/register`, { name, email, password });
+      localStorage.setItem(SESSION_KEY, JSON.stringify(res.data));
+      setUser(res.data);
+      return res.data;
+    } catch (error) {
+      throw new Error(extractErrorMessage(error, "Kayıt olurken bir hata oluştu."), { cause: error });
     }
-    if (password.length < 6) {
-      throw new Error("Parola en az 6 karakter olmalı.");
-    }
-    const users = loadUsers();
-    if (users[normalizedEmail]) {
-      throw new Error("Bu e-posta ile zaten bir hesap var. Giriş yapmayı deneyin.");
-    }
-    users[normalizedEmail] = { name: name.trim(), email: normalizedEmail, passwordHash: simpleHash(password) };
-    saveUsers(users);
-
-    const session = { name: users[normalizedEmail].name, email: normalizedEmail };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    setUser(session);
-    return session;
   }, []);
 
-  const login = useCallback((email, password) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const users = loadUsers();
-    const record = users[normalizedEmail];
-    if (!record || record.passwordHash !== simpleHash(password)) {
-      throw new Error("E-posta veya parola hatalı.");
+  const login = useCallback(async (email, password) => {
+    try {
+      const res = await axios.post(`${API_BASE}/login`, { email, password });
+      localStorage.setItem(SESSION_KEY, JSON.stringify(res.data));
+      setUser(res.data);
+      return res.data;
+    } catch (error) {
+      throw new Error(extractErrorMessage(error, "Giriş yapılırken bir hata oluştu."), { cause: error });
     }
-    const session = { name: record.name, email: normalizedEmail };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    setUser(session);
-    return session;
   }, []);
 
   const logout = useCallback(() => {

@@ -24,9 +24,9 @@ const Login = () => {
     setSubmitting(true);
     try {
       if (mode === "login") {
-        login(email, password);
+        await login(email, password);
       } else {
-        register(name, email, password);
+        await register(name, email, password);
       }
       navigate("/select");
     } catch (err) {
@@ -107,8 +107,8 @@ const Login = () => {
         </form>
 
         <p className="auth-note">
-          Bu demo sürümde hesap bilgileri yalnızca kendi tarayıcınızda (localStorage)
-          tutulur; bir sunucuya gönderilmez.
+          Hesabın bu demo sürümde de gerçek bir veritabanına (MySQL) kaydediliyor;
+          parolan hash'lenmeden hiçbir yere yazılmıyor.
         </p>
       </div>
     </div>

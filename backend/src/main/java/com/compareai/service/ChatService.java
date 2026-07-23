@@ -8,7 +8,6 @@ import com.compareai.dto.request.ChatRequest;
 import com.compareai.dto.request.SelectMessageRequest;
 import com.compareai.dto.response.ChatResponse;
 import com.compareai.dto.response.ConversationResponse;
-import com.compareai.dto.response.ConversationSummaryResponse;
 import com.compareai.dto.response.MessageResponse;
 import com.compareai.entity.AiProvider;
 import com.compareai.entity.Conversation;
@@ -189,17 +188,6 @@ public class ChatService {
     public ConversationResponse getConversation(Long conversationId) {
         Conversation conversation = getConversationOrThrow(conversationId);
         return toConversationResponse(conversation);
-    }
-
-    @Transactional(readOnly = true)
-    public List<ConversationSummaryResponse> getAllConversations() {
-        return conversationRepository.findAllByOrderByCreatedAtDesc().stream()
-                .map(c -> ConversationSummaryResponse.builder()
-                        .id(c.getId())
-                        .title(c.getTitle())
-                        .createdAt(c.getCreatedAt())
-                        .build())
-                .collect(Collectors.toList());
     }
 
     // ---- yardımcı metodlar ----

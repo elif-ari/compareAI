@@ -1,11 +1,11 @@
 import { useNavigate } from "react-router-dom";
-import { Check, ArrowRight, LogOut, BadgeCheck } from "lucide-react";
+import { Check, ArrowRight, LogOut, BadgeCheck, Eraser } from "lucide-react";
 import { AI_GROUPS, MIN_SELECTION, MAX_SELECTION } from "../data/aiCatalog";
 import { useSelection } from "../context/SelectionContext";
 import { useAuth } from "../context/AuthContext";
 
 const SelectProviders = () => {
-  const { selectedIds, toggleProvider, isValidSelection } = useSelection();
+  const { selectedIds, toggleProvider, clearSelection, isValidSelection } = useSelection();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -85,6 +85,12 @@ const SelectProviders = () => {
           {count} / {MAX_SELECTION} seçildi
           {count < MIN_SELECTION && ` · en az ${MIN_SELECTION} seçmelisin`}
         </div>
+        {count > 0 && (
+          <button type="button" className="setup-skip" onClick={clearSelection}>
+            <Eraser size={14} style={{ marginRight: 6 }} />
+            Seçimleri temizle
+          </button>
+        )}
         <button className="setup-continue" disabled={!isValidSelection} onClick={handleContinue}>
           Devam Et <ArrowRight size={16} />
         </button>
