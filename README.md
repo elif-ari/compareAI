@@ -123,6 +123,45 @@ Merhaba
 
 ---
 
+# Frontend Kullanıcı Akışı (v1)
+
+Frontend artık React Router ile 4 adımlı bir akış üzerinden çalışıyor:
+
+1. **`/login`** — Kayıt / Giriş. Backend'de auth servisi olmadığı için bu v1'de
+   tarayıcı `localStorage`'ında tutulan basit bir demo hesap sistemidir (üretimde
+   gerçek bir backend auth servisine bağlanmalı).
+2. **`/select`** — Karşılaştırılacak yapay zekaları grupları içinde seç
+   (Büyük ticari modeller, Açık kaynak modeller, Kod odaklı modeller, Vision
+   modelleri). En az **2**, en fazla **10** model seçilebilir.
+3. **`/keys`** — Seçilen her model için API anahtarını yapıştır. Anahtarlar
+   yalnızca tarayıcıda saklanır.
+4. **`/compare`** — Seçilen sayıda (2-10) konteynerin gösterildiği karşılaştırma
+   ekranı.
+
+**Önemli:** v1'de backend'e hiçbir değişiklik yapılmadı — hâlâ yalnızca 3 mock
+client var (`OPENAI`, `CLAUDE`, `GEMINI`). Bu yüzden seçim ekranında **ChatGPT,
+Claude ve Gemini "Canlı"** etiketiyle işaretli ve gerçekten backend'den cevap
+alıyor; listedeki diğer tüm modeller (Grok, Llama, Mistral, DeepSeek vb.) v1'de
+yalnızca arayüzün nasıl büyüyeceğini göstermek amacıyla seçilebilir durumda,
+ama gerçek bir API çağrısı yapmıyorlar ("v2'de aktif olacak" etiketi).
+
+## Bu oturumda düzeltilen buglar
+
+- **Konuşma sürekliliği kırıktı:** `handleSendMessage` backend'e `conversationId`
+  göndermiyordu, bu yüzden her mesaj yeni bir konuşma açıyordu. Artık aktif
+  konuşma id'si state'te tutuluyor ve her istekle birlikte gönderiliyor.
+- **Geçmiş sohbetler tıklanamıyordu:** Sol menüdeki `history-item` butonlarında
+  `onClick` yoktu. Artık bir sohbete tıklayınca `GET /conversations/{id}` ile
+  tüm mesajlar çekilip ilgili dal (branch) ekrana yansıtılıyor.
+- **"X ile devam et" arayüze yansımıyordu:** Dal seçimi backend'de kaydediliyordu
+  ama ekranda hiçbir şey değişmiyordu. Artık seçilen kart görsel olarak
+  vurgulanıyor ve konuşmanın HEAD'i güncelleniyor.
+- **Sidebar'da görsel bug:** `index.css` içinde `border-right: 1px border #e2e8f0;`
+  geçersiz bir CSS değeriydi (`solid` yerine `border` yazılmıştı), bu yüzden
+  sidebar'ın sağ kenarlığı hiç görünmüyordu.
+
+---
+
 # Mimari
 
 Detaylı mimari açıklamaları ve diyagramlar `docs/architecture.md` dosyasında yer almaktadır.
