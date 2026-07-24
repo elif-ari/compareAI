@@ -198,6 +198,12 @@ public class ChatService {
         }
         Conversation conversation = new Conversation();
         conversation.setTitle(generateTitle(request.getPrompt()));
+        if (request.getProviders() != null && !request.getProviders().isEmpty()) {
+            conversation.setProviders(String.join(",", request.getProviders()));
+        }
+        if (request.getMode() != null) {
+            conversation.setMode(request.getMode());
+        }
         return conversationRepository.save(conversation);
     }
 

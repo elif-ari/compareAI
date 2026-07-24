@@ -15,7 +15,7 @@ const Login = () => {
   const [submitting, setSubmitting] = useState(false);
 
   if (user) {
-    return <Navigate to="/select" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   const handleSubmit = async (e) => {
@@ -28,7 +28,7 @@ const Login = () => {
       } else {
         await register(name, email, password);
       }
-      navigate("/select");
+      navigate("/dashboard");
     } catch (err) {
       setError(err.message || "Bir şeyler ters gitti.");
     } finally {

@@ -1,14 +1,15 @@
 package com.compareai.client;
 
 import com.compareai.entity.AiProvider;
-import org.springframework.stereotype.Component;
 import com.compareai.dto.ai.AiRequest;
 import com.compareai.dto.ai.AiClientResponse;
 
 /**
- * GECICI mock client. Gercek Google Gemini API'si baglanana kadar kullanilir.
+ * GECICI mock client. Artik kullanilmiyor - gercek entegrasyon service/GeminiClient.java'da.
+ * DIKKAT: @Component KASITLI OLARAK KALDIRILDI.
+ * Tekrar mock'a donmek istersen: bu satirin ustune @Component ekle,
+ * GeminiClient.java'daki @Component'i kaldir.
  */
-@Component
 public class MockGeminiClient implements AiClient {
 
     @Override

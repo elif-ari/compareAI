@@ -4,9 +4,9 @@ import { SelectionProvider } from './context/SelectionContext';
 import RequireAuth from './components/RequireAuth';
 import RequireSetup from './components/RequireSetup';
 import Login from './pages/Login';
-import SelectProviders from './pages/SelectProviders';
-import ApiKeys from './pages/ApiKeys';
-import Compare from './pages/Compare';
+import Dashboard from './pages/Dashboard';
+import NewChat from './pages/NewChat';
+import Chat from './pages/Chat';
 
 function App() {
   return (
@@ -15,32 +15,32 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
-            path="/select"
+            path="/dashboard"
             element={
               <RequireAuth>
-                <SelectProviders />
+                <Dashboard />
               </RequireAuth>
             }
           />
           <Route
-            path="/keys"
+            path="/new-chat"
             element={
               <RequireAuth>
-                <ApiKeys />
+                <NewChat />
               </RequireAuth>
             }
           />
           <Route
-            path="/compare"
+            path="/chat"
             element={
               <RequireAuth>
                 <RequireSetup>
-                  <Compare />
+                  <Chat />
                 </RequireSetup>
               </RequireAuth>
             }
           />
-          <Route path="*" element={<Navigate to="/login" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </SelectionProvider>
     </AuthProvider>

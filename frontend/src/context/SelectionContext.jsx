@@ -1,42 +1,42 @@
 import { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { useAuth } from "./AuthContext";
-import { MIN_SELECTION, MAX_SELECTION } from "../data/aiCatalog";
+import { MIN_SELECTION, CHAT_MODES } from "../data/aiCatalog";
 
 const SelectionContext = createContext(null);
 
 function storageKey(email) {
-  return `compareai_selection_${email || "guest"}`;
+  return `compareai_newchat_${email || "guest"}`;
 }
 
 function loadForUser(email) {
   try {
     const raw = JSON.parse(localStorage.getItem(storageKey(email)));
     return {
-      selectedIds: raw?.selectedIds || [],
-      apiKeys: raw?.apiKeys || {},
+      providers: raw?.providers || [],
+      mode: raw?.mode || CHAT_MODES.INDEPENDENT,
     };
   } catch {
-    return { selectedIds: [], apiKeys: {} };
+    return { providers: [], mode: CHAT_MODES.INDEPENDENT };
   }
 }
 
 export const SelectionProvider = ({ children }) => {
   const { user } = useAuth();
-  const [selectedIds, setSelectedIds] = useState([]);
-  const [apiKeys, setApiKeys] = useState({});
+  const [providers, setProviders] = useState([]);
+  const [mode, setModeState] = useState(CHAT_MODES.INDEPENDENT);
 
   // Kullanıcı değiştiğinde (login/logout) kendi kayıtlı seçimini yükle.
   useEffect(() => {
     const data = loadForUser(user?.email);
-    setSelectedIds(data.selectedIds);
-    setApiKeys(data.apiKeys);
+    setProviders(data.providers);
+    setModeState(data.mode);
   }, [user?.email]);
 
   const persist = useCallback(
-    (nextSelectedIds, nextApiKeys) => {
+    (nextProviders, nextMode) => {
       localStorage.setItem(
         storageKey(user?.email),
-        JSON.stringify({ selectedIds: nextSelectedIds, apiKeys: nextApiKeys })
+        JSON.stringify({ providers: nextProviders, mode: nextMode })
       );
     },
     [user?.email]
@@ -44,52 +44,34 @@ export const SelectionProvider = ({ children }) => {
 
   const toggleProvider = useCallback(
     (id) => {
-      setSelectedIds((prev) => {
+      setProviders((prev) => {
         const isSelected = prev.includes(id);
-        let next;
-        if (isSelected) {
-          next = prev.filter((p) => p !== id);
-        } else {
-          if (prev.length >= MAX_SELECTION) return prev; // en fazla 10
-          next = [...prev, id];
-        }
-        persist(next, apiKeys);
+        const next = isSelected ? prev.filter((p) => p !== id) : [...prev, id];
+        persist(next, mode);
         return next;
       });
     },
-    [apiKeys, persist]
+    [mode, persist]
   );
 
-  const setApiKey = useCallback(
-    (id, key) => {
-      setApiKeys((prev) => {
-        const next = { ...prev, [id]: key };
-        persist(selectedIds, next);
-        return next;
-      });
+  const setMode = useCallback(
+    (nextMode) => {
+      setModeState(nextMode);
+      persist(providers, nextMode);
     },
-    [selectedIds, persist]
+    [providers, persist]
   );
 
-  const clearSelection = useCallback(() => {
-    setSelectedIds([]);
-    setApiKeys({});
-    persist([], {});
-  }, [persist]);
-
-  const isValidSelection = selectedIds.length >= MIN_SELECTION && selectedIds.length <= MAX_SELECTION;
-  const keysComplete = selectedIds.length > 0 && selectedIds.every((id) => (apiKeys[id] || "").trim().length > 0);
+  const isValidSelection = providers.length >= MIN_SELECTION;
 
   return (
     <SelectionContext.Provider
       value={{
-        selectedIds,
-        apiKeys,
+        providers,
+        mode,
         toggleProvider,
-        setApiKey,
-        clearSelection,
+        setMode,
         isValidSelection,
-        keysComplete,
       }}
     >
       {children}

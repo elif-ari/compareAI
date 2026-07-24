@@ -31,6 +31,15 @@ public class Conversation {
     @Column(name = "current_message_id")
     private Long currentMessageId;
 
+    // Yeni sohbet ekranında seçilen sağlayıcılar (ör. "OPENAI,CLAUDE").
+    // Basitlik için tek bir kolonda virgülle ayrılmış olarak tutulur.
+    @Column(length = 255)
+    private String providers;
+
+    // Yeni sohbet ekranında seçilen çalışma modu: INDEPENDENT | COMPARE
+    @Column(length = 20)
+    private String mode;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

@@ -6,7 +6,9 @@ import com.compareai.dto.ai.AiRequest;
 import com.compareai.dto.ai.AiClientResponse;
 
 
-@Component
+// DIKKAT: @Component KASITLI OLARAK KALDIRILDI - gercek entegrasyon service/ClaudeClient.java'da.
+// Tekrar mock'a donmek istersen: bu satirin ustune @Component ekle,
+// ClaudeClient.java'daki @Component'i kaldir.
 public class MockClaudeClient implements AiClient {
 
     @Override

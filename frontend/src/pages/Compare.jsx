@@ -28,9 +28,16 @@ const Compare = () => {
   // (backend'e askAllProviders:false gönderilir). "Tümüne dön" ile bu mod kapatılır.
   const [activeBranchProvider, setActiveBranchProvider] = useState(null);
 
+  // Tek sağlayıcı modunda bir sonraki mesajın parent'ı olacak mesaj id'si (her zaman
+  // o sağlayıcının EN SON verdiği ASSISTANT cevabı). Backend her mesaj gönderiminde
+  // konuşmanın HEAD'ini otomatik olarak yeni USER mesajına taşıyor; bu yüzden
+  // parentMessageId'yi varsayılana bırakamayız - explicit olarak göndermemiz gerekiyor,
+  // yoksa ikinci mesajda parent bir USER mesajı olur ve backend 400 döner.
+  const [branchAnchorId, setBranchAnchorId] = useState(null);
+
   const activeBranchDefinition = useMemo(
-    () => providers.find((p) => p.backendProvider === activeBranchProvider),
-    [providers, activeBranchProvider]
+      () => providers.find((p) => p.backendProvider === activeBranchProvider),
+      [providers, activeBranchProvider]
   );
 
   // Şu anki HEAD'e göre gösterilecek "tur"u (son kullanıcı mesajı + ona bağlı AI cevapları) hesapla.
@@ -48,26 +55,26 @@ const Compare = () => {
     if (!lastUserMessage) return { userMessage: null, aiMessages: [] };
 
     const aiMessages = messages.filter(
-      (m) => m.role === "ASSISTANT" && m.parentMessageId === lastUserMessage.id
+        (m) => m.role === "ASSISTANT" && m.parentMessageId === lastUserMessage.id
     );
 
     return { userMessage: lastUserMessage, aiMessages };
   }, [headId, messages]);
 
   const getAiMessage = useCallback(
-    (backendProvider) => currentTurn.aiMessages.find((m) => m.provider === backendProvider),
-    [currentTurn]
+      (backendProvider) => currentTurn.aiMessages.find((m) => m.provider === backendProvider),
+      [currentTurn]
   );
 
   // Bir sağlayıcının konuşma boyunca verdiği EN SON cevabı bul (sadece bu turdaki değil).
   // "X ile devam et" bu mesajı HEAD yapar, böylece o sağlayıcının kendi dalında kaldığı yerden devam edilir.
   const getLatestMessageForProvider = useCallback(
-    (backendProvider) => {
-      const own = messages.filter((m) => m.role === "ASSISTANT" && m.provider === backendProvider);
-      if (own.length === 0) return null;
-      return own.reduce((latest, m) => (m.id > latest.id ? m : latest), own[0]);
-    },
-    [messages]
+      (backendProvider) => {
+        const own = messages.filter((m) => m.role === "ASSISTANT" && m.provider === backendProvider);
+        if (own.length === 0) return null;
+        return own.reduce((latest, m) => (m.id > latest.id ? m : latest), own[0]);
+      },
+      [messages]
   );
 
   const startNewChat = () => {
@@ -75,6 +82,7 @@ const Compare = () => {
     setMessages([]);
     setHeadId(null);
     setActiveBranchProvider(null);
+    setBranchAnchorId(null);
     setInputText("");
   };
 
@@ -98,6 +106,11 @@ const Compare = () => {
         askAllProviders: activeBranchProvider === null,
       };
       if (conversationId) payload.conversationId = conversationId;
+      // Tek sağlayıcı modundaysak parent'ı açıkça o sağlayıcının son cevabına sabitle
+      // (backend'in varsayılan HEAD'i her mesajdan sonra bir USER mesajına döner, işimize yaramaz).
+      if (activeBranchProvider !== null && branchAnchorId) {
+        payload.parentMessageId = branchAnchorId;
+      }
 
       const response = await axios.post(API_BASE, payload);
       const { conversationId: newConvId, currentMessageId, userMessage, aiResponses } = response.data;
@@ -107,6 +120,10 @@ const Compare = () => {
       setHeadId(currentMessageId);
       // activeBranchProvider bilerek SIFIRLANMIYOR: tek-sağlayıcı modundaysak
       // bir sonraki mesaj da varsayılan olarak aynı sağlayıcıya gitmeye devam etsin.
+      if (activeBranchProvider !== null && aiResponses.length === 1) {
+        // Bir sonraki mesajın parent'ı için: az önce gelen cevabı "anchor" yap.
+        setBranchAnchorId(aiResponses[0].id);
+      }
     } catch (error) {
       console.error("Backend hatası:", error);
       alert("Backend'e ulaşılamadı veya bir hata oluştu. Konsolu kontrol et.");
@@ -128,6 +145,7 @@ const Compare = () => {
       });
       setHeadId(res.data.currentMessageId);
       setActiveBranchProvider(backendProvider);
+      setBranchAnchorId(latestMessage.id);
     } catch (error) {
       console.error("Dal seçimi başarısız:", error);
       alert("Bu daldan devam edilemedi. Konsolu kontrol et.");
@@ -136,6 +154,7 @@ const Compare = () => {
 
   const handleReturnToBroadcast = () => {
     setActiveBranchProvider(null);
+    setBranchAnchorId(null);
   };
 
   const handleKeyDown = (e) => {
@@ -146,150 +165,150 @@ const Compare = () => {
   };
 
   return (
-    <div className="compare-page">
-      <header className="header">
-        <div className="header-left">
-          <span className="header-brand">CompareAI</span>
-          <span className="header-divider">·</span>
-          <span>
+      <div className="compare-page">
+        <header className="header">
+          <div className="header-left">
+            <span className="header-brand">CompareAI</span>
+            <span className="header-divider">·</span>
+            <span>
             <strong>{providers.length}</strong> model seçili
           </span>
-          <button className="icon-btn" onClick={startNewChat} title="Yeni sohbet">
-            <Plus size={16} />
-          </button>
-        </div>
-        <div className="header-right">
-          <span className="setup-user">{user?.name}</span>
-          <button className="header-edit-btn" onClick={() => navigate("/select")}>
-            <Settings2 size={14} /> Seçimi düzenle
-          </button>
-          <button className="icon-btn" onClick={logout} title="Çıkış yap">
-            <LogOut size={16} />
-          </button>
-        </div>
-      </header>
+            <button className="icon-btn" onClick={startNewChat} title="Yeni sohbet">
+              <Plus size={16} />
+            </button>
+          </div>
+          <div className="header-right">
+            <span className="setup-user">{user?.name}</span>
+            <button className="header-edit-btn" onClick={() => navigate("/select")}>
+              <Settings2 size={14} /> Seçimi düzenle
+            </button>
+            <button className="icon-btn" onClick={logout} title="Çıkış yap">
+              <LogOut size={16} />
+            </button>
+          </div>
+        </header>
 
-      <div className="main-content">
-        <div className="input-section">
-          {activeBranchDefinition && (
-            <div className="branch-banner">
-              <Radio size={14} />
-              <span>
+        <div className="main-content">
+          <div className="input-section">
+            {activeBranchDefinition && (
+                <div className="branch-banner">
+                  <Radio size={14} />
+                  <span>
                 Şu an yalnızca <strong>{activeBranchDefinition.name}</strong> ile konuşuyorsun.
                 Diğerleri bu turdaki soruyu görmeyecek.
               </span>
-              <button className="branch-banner-close" onClick={handleReturnToBroadcast}>
-                <X size={13} /> Tümüne dön
-              </button>
-            </div>
-          )}
-          <div className="input-box">
-            <textarea
-              rows="1"
-              placeholder={
-                activeBranchDefinition
-                  ? `${activeBranchDefinition.name} ile devam et... (Enter ile gönder)`
-                  : "Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
-              }
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isLoading}
-            />
-            <button className="send-btn" onClick={handleSendMessage} disabled={isLoading}>
-              {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-            </button>
-          </div>
-        </div>
-
-        {/* AI Kartları */}
-        <div className="cards-container">
-          {providers.map((provider, index) => {
-            const palette = CARD_PALETTE[index % CARD_PALETTE.length];
-            const isActiveBranch = activeBranchProvider === provider.backendProvider;
-            const isMutedThisTurn = activeBranchProvider !== null && !isActiveBranch;
-
-            if (provider.functional) {
-              const aiMessage = getAiMessage(provider.backendProvider);
-              const hasAnyHistory = !!getLatestMessageForProvider(provider.backendProvider);
-              return (
-                <div
-                  key={provider.id}
-                  className={`ai-card ${isActiveBranch ? "active-branch" : ""} ${isMutedThisTurn ? "muted-card" : ""}`}
-                  style={{ "--card-color": palette.bg, "--card-border": palette.border, "--card-text": palette.text }}
-                >
-                  <div className="card-header">
-                    <div className="avatar" style={{ background: palette.bg }}>
-                      {provider.vendor[0]}
-                    </div>
-                    <div>
-                      <strong>{provider.name}</strong>
-                      <div style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
-                        {provider.vendor} · {provider.detail}
-                      </div>
-                    </div>
-                    <span className="live-badge card-live-badge">Canlı</span>
-                  </div>
-                  <div className="card-body">
-                    {!currentTurn.userMessage
-                      ? "Mesajınızı bekliyor..."
-                      : aiMessage
-                      ? aiMessage.content
-                      : isMutedThisTurn
-                      ? `Bu turda soru sorulmadı (şu an yalnızca ${activeBranchDefinition?.name} ile konuşuluyor).`
-                      : "Cevap alınamadı."}
-                  </div>
-                  <div className="card-footer">
-                    <button
-                      className="continue-btn"
-                      style={{ color: palette.text, borderColor: palette.border }}
-                      onClick={() => handleContinueWith(provider.backendProvider)}
-                      disabled={!hasAnyHistory || isActiveBranch}
-                    >
-                      {isActiveBranch ? "Şu an bu sağlayıcıdasın" : `${provider.name} ile devam et →`}
-                    </button>
-                  </div>
-                </div>
-              );
-            }
-
-            // Fonksiyonel olmayan (v1'de görsel amaçlı) sağlayıcı kartı
-            return (
-              <div
-                key={provider.id}
-                className="ai-card placeholder-card"
-                style={{ "--card-color": palette.bg, "--card-border": palette.border, "--card-text": palette.text }}
-              >
-                <div className="card-header">
-                  <div className="avatar" style={{ background: palette.bg }}>
-                    {provider.vendor[0]}
-                  </div>
-                  <div>
-                    <strong>{provider.name}</strong>
-                    <div style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
-                      {provider.vendor} · {provider.detail}
-                    </div>
-                  </div>
-                  <span className="soon-badge card-live-badge">
-                    <Clock size={12} /> v2
-                  </span>
-                </div>
-                <div className="card-body placeholder-body">
-                  {currentTurn.userMessage
-                    ? `Sorunuz alındı: "${currentTurn.userMessage.content}". Bu model için gerçek API entegrasyonu v2'de eklenecek.`
-                    : "Bu model v1'de yalnızca arayüzü göstermek için burada; gerçek yanıt üretmiyor."}
-                </div>
-                <div className="card-footer">
-                  <button className="continue-btn" disabled>
-                    v2'de kullanılabilir olacak
+                  <button className="branch-banner-close" onClick={handleReturnToBroadcast}>
+                    <X size={13} /> Tümüne dön
                   </button>
                 </div>
-              </div>
-            );
-          })}
+            )}
+            <div className="input-box">
+            <textarea
+                rows="1"
+                placeholder={
+                  activeBranchDefinition
+                      ? `${activeBranchDefinition.name} ile devam et... (Enter ile gönder)`
+                      : "Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
+                }
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading}
+            />
+              <button className="send-btn" onClick={handleSendMessage} disabled={isLoading}>
+                {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+              </button>
+            </div>
+          </div>
+
+          {/* AI Kartları */}
+          <div className="cards-container">
+            {providers.map((provider, index) => {
+              const palette = CARD_PALETTE[index % CARD_PALETTE.length];
+              const isActiveBranch = activeBranchProvider === provider.backendProvider;
+              const isMutedThisTurn = activeBranchProvider !== null && !isActiveBranch;
+
+              if (provider.functional) {
+                const aiMessage = getAiMessage(provider.backendProvider);
+                const hasAnyHistory = !!getLatestMessageForProvider(provider.backendProvider);
+                return (
+                    <div
+                        key={provider.id}
+                        className={`ai-card ${isActiveBranch ? "active-branch" : ""} ${isMutedThisTurn ? "muted-card" : ""}`}
+                        style={{ "--card-color": palette.bg, "--card-border": palette.border, "--card-text": palette.text }}
+                    >
+                      <div className="card-header">
+                        <div className="avatar" style={{ background: palette.bg }}>
+                          {provider.vendor[0]}
+                        </div>
+                        <div>
+                          <strong>{provider.name}</strong>
+                          <div style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                            {provider.vendor} · {provider.detail}
+                          </div>
+                        </div>
+                        <span className="live-badge card-live-badge">Canlı</span>
+                      </div>
+                      <div className="card-body">
+                        {!currentTurn.userMessage
+                            ? "Mesajınızı bekliyor..."
+                            : aiMessage
+                                ? aiMessage.content
+                                : isMutedThisTurn
+                                    ? `Bu turda soru sorulmadı (şu an yalnızca ${activeBranchDefinition?.name} ile konuşuluyor).`
+                                    : "Cevap alınamadı."}
+                      </div>
+                      <div className="card-footer">
+                        <button
+                            className="continue-btn"
+                            style={{ color: palette.text, borderColor: palette.border }}
+                            onClick={() => handleContinueWith(provider.backendProvider)}
+                            disabled={!hasAnyHistory || isActiveBranch}
+                        >
+                          {isActiveBranch ? "Şu an bu sağlayıcıdasın" : `${provider.name} ile devam et →`}
+                        </button>
+                      </div>
+                    </div>
+                );
+              }
+
+              // Fonksiyonel olmayan (v1'de görsel amaçlı) sağlayıcı kartı
+              return (
+                  <div
+                      key={provider.id}
+                      className="ai-card placeholder-card"
+                      style={{ "--card-color": palette.bg, "--card-border": palette.border, "--card-text": palette.text }}
+                  >
+                    <div className="card-header">
+                      <div className="avatar" style={{ background: palette.bg }}>
+                        {provider.vendor[0]}
+                      </div>
+                      <div>
+                        <strong>{provider.name}</strong>
+                        <div style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                          {provider.vendor} · {provider.detail}
+                        </div>
+                      </div>
+                      <span className="soon-badge card-live-badge">
+                    <Clock size={12} /> v2
+                  </span>
+                    </div>
+                    <div className="card-body placeholder-body">
+                      {currentTurn.userMessage
+                          ? `Sorunuz alındı: "${currentTurn.userMessage.content}". Bu model için gerçek API entegrasyonu v2'de eklenecek.`
+                          : "Bu model v1'de yalnızca arayüzü göstermek için burada; gerçek yanıt üretmiyor."}
+                    </div>
+                    <div className="card-footer">
+                      <button className="continue-btn" disabled>
+                        v2'de kullanılabilir olacak
+                      </button>
+                    </div>
+                  </div>
+              );
+            })}
+          </div>
         </div>
       </div>
-    </div>
   );
 };
 

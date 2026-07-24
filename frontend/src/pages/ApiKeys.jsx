@@ -32,14 +32,14 @@ const ApiKeys = () => {
         <div>
           <h1>API anahtarlarını yapıştır</h1>
           <p>
-            Seçtiğin her yapay zeka için kendi API anahtarını buraya yapıştır. Anahtarlar yalnızca
-            tarayıcında saklanır.
+            Seçtiğin her yapay zeka için kendi API anahtarını buraya yapıştır.
+            Anahtarlar yalnızca tarayıcında saklanır.
             <br />
             <span className="setup-hint">
-              <strong>Canlı</strong> etiketli olanlar (ChatGPT, Claude, Gemini) gerçekten backend
-              üzerinden yanıt verir; diğerleri v1'de yalnızca alanın nasıl çalışacağını göstermek
-              içindir.
-            </span>
+          <strong>Canlı</strong> etiketli olanlar (ChatGPT, Claude, Gemini)
+          gerçekten backend üzerinden yanıt verir; diğerleri v1'de yalnızca
+          alanın nasıl çalışacağını göstermek içindir.
+        </span>
           </p>
         </div>
       </header>

@@ -10,6 +10,7 @@ import com.compareai.repository.AppUserRepository;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.Locale;
 
 @Service
 public class AuthService {
@@ -23,7 +24,7 @@ public class AuthService {
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
-        String normalizedEmail = request.getEmail().trim().toLowerCase();
+        String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
 
         if (appUserRepository.existsByEmail(normalizedEmail)) {
             throw new EmailAlreadyExistsException(
@@ -41,7 +42,7 @@ public class AuthService {
 
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
-        String normalizedEmail = request.getEmail().trim().toLowerCase();
+        String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
 
         AppUser user = appUserRepository.findByEmail(normalizedEmail)
                 .orElseThrow(() -> new InvalidCredentialsException("E-posta veya parola hatalı."));

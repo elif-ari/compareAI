@@ -5,7 +5,13 @@ import com.compareai.dto.ai.AiClientResponse;
 import com.compareai.entity.AiProvider;
 import org.springframework.stereotype.Component;
 
-@Component
+// DIKKAT: @Component KASITLI OLARAK KALDIRILDI.
+// Gercek OpenAI entegrasyonu com.compareai.service.OpenAiClient sinifinda yapildi ve o,
+// AiProvider.OPENAI icin kullanilan client oldu. Bu sinif hem @Component hem de o sinif
+// ayni anda kayitli olursa ChatService'teki clientMap'te (EnumMap<AiProvider, AiClient>)
+// hangisinin kazanacagi Spring'in bean olusturma sirasina baglar - ongorulemez olur.
+// Tekrar mock'a donmek istersen: bu satirin ustune @Component ekle,
+// OpenAiClient.java'daki @Component'i kaldir.
 public class MockOpenAiClient implements AiClient {
 
     @Override
