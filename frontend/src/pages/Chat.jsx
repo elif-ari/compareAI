@@ -93,8 +93,15 @@ const Chat = () => {
         payload.providers = selectedIds.map((id) => getProviderById(id)?.backendProvider).filter(Boolean);
         payload.mode = mode;
       }
-      if (activeBranchProvider !== null && branchAnchorId) {
-        payload.parentMessageId = branchAnchorId;
+      if (activeBranchProvider !== null) {
+        // Hedef sağlayıcıyı backend'e AÇIKÇA söylüyoruz (bkz. ChatRequest#targetProvider).
+        // Compare modunda branchAnchorId olmayabilir (bkz. handleContinueWith) - bu durumda
+        // backend zaten konuşmanın mevcut HEAD'inden devam eder, o yüzden parentMessageId'yi
+        // yalnızca elimizde varsa gönderiyoruz.
+        payload.targetProvider = activeBranchProvider;
+        if (branchAnchorId) {
+          payload.parentMessageId = branchAnchorId;
+        }
       }
 
       const response = await axios.post(API_BASE, payload);
@@ -115,8 +122,26 @@ const Chat = () => {
   };
 
   const handleContinueWith = async (backendProvider) => {
+    if (!conversationId) {
+      alert("Önce bir mesaj göndermelisin.");
+      return;
+    }
+
+    // COMPARE modunda sağlayıcılar arasında geçiş yapmak konuşmanın ORTAK bağlamını KORUR:
+    // HEAD'i o sağlayıcının kendi eski cevabına atlatmıyoruz (bu, diğer sağlayıcılarla olan
+    // geçmişi kaybettirirdi). Bunun yerine mevcut HEAD'den devam ederiz, sadece bundan sonraki
+    // mesajın kime gideceğini değiştiririz - backend zaten (Compare modda) her kullanıcı
+    // sorusuna verilen tüm cevapları birleştirip context'e koyuyor (bkz. ChatService#buildContext).
+    if (mode === CHAT_MODES.COMPARE) {
+      setActiveBranchProvider(backendProvider);
+      setBranchAnchorId(null);
+      return;
+    }
+
+    // INDEPENDENT modda ise her sağlayıcı yalnızca KENDİ geçmişini görmeli, o yüzden klasik
+    // "checkout": o sağlayıcının en son kendi cevabına dal atlıyoruz.
     const latestMessage = getLatestMessageForProvider(backendProvider);
-    if (!latestMessage || !conversationId) {
+    if (!latestMessage) {
       alert("Bu sağlayıcıdan henüz bir cevap yok.");
       return;
     }
@@ -218,6 +243,8 @@ const Chat = () => {
 
             const aiMessage = getAiMessage(provider.backendProvider);
             const hasAnyHistory = !!getLatestMessageForProvider(provider.backendProvider);
+            const canContinueWith =
+              mode === CHAT_MODES.COMPARE ? !!currentTurn.userMessage : hasAnyHistory;
             return (
               <div
                 key={provider.id}
@@ -249,7 +276,7 @@ const Chat = () => {
                     className="continue-btn"
                     style={{ color: palette.text, borderColor: palette.border }}
                     onClick={() => handleContinueWith(provider.backendProvider)}
-                    disabled={!hasAnyHistory || isActiveBranch}
+                    disabled={!canContinueWith || isActiveBranch}
                   >
                     {isActiveBranch ? "Şu an bu sağlayıcıdasın" : `${provider.name} ile devam et →`}
                   </button>

@@ -83,7 +83,9 @@ const NewChat = () => {
                 <strong>Compare Chat</strong>
                 <p>Yapay zekalar ortak konuşma bağlamını paylaşır; biri diğerinin cevabını da okuyabilir.</p>
                 <span className="mode-soon">
-                  <Info size={12} /> Ortak bağlam davranışı yakında aktif olacak — şimdilik yalnızca seçim kaydedilir.
+                  <Info size={12} /> Örn: Claude'a sorduğun soruyu, sonra "ChatGPT ile devam et" deyip
+                  hiçbir şey açıklamadan "sen ne düşünüyorsun?" diye sorduğunda ChatGPT, Claude'un o
+                  soruya verdiği cevabı da bağlamında görür.
                 </span>
               </div>
             </label>

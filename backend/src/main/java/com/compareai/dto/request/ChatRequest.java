@@ -23,6 +23,13 @@ public class ChatRequest {
     // null/gönderilmezse -> eski davranış: parent bir ASSISTANT mesajıysa tek sağlayıcı, değilse 3'ü de
     private Boolean askAllProviders;
 
+    // askAllProviders=false olduğunda mesajın hangi sağlayıcıya (OPENAI/CLAUDE/GEMINI) gideceğini
+    // AÇIKÇA belirtir. Bunu eklememizin sebebi: Compare modunda "X ile devam et" dendiğinde
+    // parentMessageId artık illa X'in kendi cevabı olmuyor (bkz. ChatService#resolveSingleProvider) -
+    // o yüzden hedef sağlayıcıyı parent'tan çıkarmak yerine doğrudan burada söylüyoruz.
+    // Boş bırakılırsa eski davranışa (parent'ın provider'ı) düşülür (geriye dönük uyumluluk).
+    private String targetProvider;
+
     // Yeni Sohbet ekranında seçilen sağlayıcılar (ör. ["OPENAI","CLAUDE"]).
     // Yalnızca conversationId boşken (yeni konuşma oluşturulurken) dikkate alınır.
     private List<String> providers;

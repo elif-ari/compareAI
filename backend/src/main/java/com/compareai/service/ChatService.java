@@ -22,9 +22,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -85,20 +84,23 @@ public class ChatService {
         conversation.setCurrentMessageId(userMessage.getId());
         conversationRepository.save(conversation);
 
-        // 2) Kök'ten bu mesaja kadar olan yolu (branch context'i) çıkar
-        List<AiMessage> context = buildContext(conversation.getId(), userMessage);
-        AiRequest aiRequest = AiRequest.builder().messages(context).build();
-
-        // 3) Hangi sağlayıcılara soru sorulacağını belirle:
+        // 2) Hangi sağlayıcılara soru sorulacağını belirle:
         //    - request.askAllProviders açıkça geldiyse (frontend hangi bar'ın kullanıldığını biliyor) ona uy.
         //    - gelmediyse eski (rol bazlı) çıkarım mantığına düş.
-        List<AiClient> targetClients = resolveTargetClients(parentMessage, request.getAskAllProviders());
+        List<AiClient> targetClients = resolveTargetClients(parentMessage, request.getAskAllProviders(), request.getTargetProvider());
 
-        // 4) Seçilen sağlayıcılara AYNI ANDA (paralel) istek at
+        // 3) Seçilen sağlayıcılara AYNI ANDA (paralel) istek at.
+        //    ÖNEMLİ: context artık her sağlayıcı için AYRI hesaplanıyor (buildContext'e bkz.) çünkü
+        //    Independent modda her sağlayıcı sadece kendi geçmişini görmeli; Compare modda ise
+        //    context her sağlayıcı için aynı (ortak/birleşik geçmiş) olur.
         final Message finalUserMessage = userMessage;
+        final Conversation finalConversation = conversation;
         List<CompletableFuture<MessageResponse>> futures = targetClients.stream()
-                .map(client -> CompletableFuture.supplyAsync(() ->
-                        callProviderAndSave(client, aiRequest, conversation, finalUserMessage), taskExecutor))
+                .map(client -> CompletableFuture.supplyAsync(() -> {
+                    List<AiMessage> context = buildContext(finalConversation, finalUserMessage, client.getProvider());
+                    AiRequest aiRequest = AiRequest.builder().messages(context).build();
+                    return callProviderAndSave(client, aiRequest, finalConversation, finalUserMessage);
+                }, taskExecutor))
                 .collect(Collectors.toList());
 
         List<MessageResponse> aiResponses = futures.stream()
@@ -116,13 +118,14 @@ public class ChatService {
     /**
      * Hangi AI sağlayıcı(lar)ına soru sorulacağını belirler.
      *
-     * @param parentMessage    yeni mesajın bağlandığı parent (context/dal bilgisi için)
+     * @param parentMessage    yeni mesajın bağlandığı parent (geriye dönük uyumluluk için provider çıkarımında kullanılır)
      * @param askAllProviders  frontend'den gelen açık sinyal:
      *                         true  -> üst orta bar: dal ne olursa olsun 3'üne de sor
-     *                         false -> AI konteynerinin kendi mini bar'ı: SADECE parent'ın sağlayıcısına sor
+     *                         false -> AI konteynerinin kendi mini bar'ı: SADECE hedef sağlayıcıya sor
      *                         null  -> eski davranışa düş: parent ASSISTANT ise tek sağlayıcı, değilse 3'ü de
+     * @param targetProviderStr askAllProviders=false olduğunda hangi sağlayıcının cevap vereceği (bkz. ChatRequest#targetProvider)
      */
-    private List<AiClient> resolveTargetClients(Message parentMessage, Boolean askAllProviders) {
+    private List<AiClient> resolveTargetClients(Message parentMessage, Boolean askAllProviders, String targetProviderStr) {
         boolean wantsSingleProvider;
 
         if (askAllProviders != null) {
@@ -132,12 +135,7 @@ public class ChatService {
         }
 
         if (wantsSingleProvider) {
-            if (parentMessage == null || parentMessage.getRole() != Role.ASSISTANT) {
-                throw new InvalidBranchOperationException(
-                        "askAllProviders=false gönderildi ama parent bir AI cevabı değil; " +
-                                "hangi sağlayıcıya sorulacağı belirlenemiyor. parentMessageId bir ASSISTANT mesajına işaret etmeli.");
-            }
-            AiProvider provider = parentMessage.getAiProvider();
+            AiProvider provider = resolveSingleProvider(parentMessage, targetProviderStr);
             AiClient singleClient = clientMap.get(provider);
             if (singleClient == null) {
                 throw new ResourceNotFoundException("Sağlayıcı için client bulunamadı: " + provider);
@@ -146,6 +144,29 @@ public class ChatService {
         }
 
         return new ArrayList<>(clientMap.values());
+    }
+
+    /**
+     * Tek sağlayıcı modunda hangi AiProvider'a soru sorulacağını çözer.
+     * Önce request üzerinde AÇIKÇA belirtilen targetProvider'a bakılır (bkz. ChatRequest#targetProvider);
+     * bu, Compare modunda "X ile devam et" dendiğinde parentMessageId'nin illa X'in kendi cevabı
+     * olmasını GEREKTİRMEMEK için eklendi (Compare'da parent, ortak geçmişin en son mesajı olabilir).
+     * targetProvider gönderilmediyse eski davranışa (parent'ın sağlayıcısı) düşülür.
+     */
+    private AiProvider resolveSingleProvider(Message parentMessage, String targetProviderStr) {
+        if (targetProviderStr != null && !targetProviderStr.isBlank()) {
+            try {
+                return AiProvider.valueOf(targetProviderStr.trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new InvalidBranchOperationException("Geçersiz sağlayıcı: " + targetProviderStr);
+            }
+        }
+        if (parentMessage == null || parentMessage.getRole() != Role.ASSISTANT) {
+            throw new InvalidBranchOperationException(
+                    "askAllProviders=false gönderildi ama hangi sağlayıcıya sorulacağı belirlenemiyor. " +
+                            "targetProvider alanını gönderin ya da parentMessageId bir ASSISTANT mesajına işaret etsin.");
+        }
+        return parentMessage.getAiProvider();
     }
 
     private MessageResponse callProviderAndSave(AiClient client, AiRequest aiRequest,
@@ -239,31 +260,79 @@ public class ChatService {
     }
 
     /**
-     * Verilen yaprak (leaf) mesajdan kök'e kadar olan zinciri çıkarıp AI'ya
-     * gönderilecek sıralı context'e çevirir. N+1 sorgudan kaçınmak için
-     * konuşmadaki tüm mesajları tek seferde çekip bellekte map üzerinden geziyoruz.
+     * AI'ya gönderilecek context'i (mesaj geçmişini) oluşturur. Konuşmanın MODU'na göre iki
+     * farklı şekilde davranır:
+     *
+     * - INDEPENDENT: Hedef sağlayıcı SADECE KENDİSİNİN cevapladığı turları görür (soru + kendi
+     *   cevabı). Başka bir sağlayıcıya özel sorulmuş bir soru -metni dahi olsa- bu sağlayıcının
+     *   context'ine hiç girmez ("Her yapay zeka yalnızca kendi konuşma geçmişini görür").
+     *   NOT: Önceki bir versiyonda burada TÜM kullanıcı mesajları (hangi sağlayıcıya sorulmuş
+     *   olursa olsun) context'e ekleniyor, sadece AI cevapları filtreleniyordu. Bu, başka bir
+     *   sağlayıcıya özel sorulan bir sorunun METNİNİN diğer sağlayıcıya sızmasına yol açıyordu
+     *   (Independent'ın Compare gibi davranmasına sebep olan asıl hata buydu). Şimdi bir turun
+     *   context'e girmesi için hedef sağlayıcının o turu BİZZAT cevaplamış olması gerekiyor.
+     *
+     * - COMPARE: Her kullanıcı sorusundan sonra o soruya cevap veren TÜM sağlayıcıların
+     *   cevapları tek bir (birleşik, etiketli) ASSISTANT mesajı olarak context'e eklenir.
+     *   Böylece örn. Claude'a sorulan bir soru sonrası "ChatGPT ile devam et" dendiğinde
+     *   ChatGPT, Claude'un o soruya verdiği son cevabı da context'inde görür
+     *   ("Yapay zekalar ortak konuşma bağlamını paylaşır; biri diğerinin cevabını da okuyabilir").
+     *
+     * NOT: Bilerek parent_message_id zincirini (branch pointer) DEĞİL, konuşmanın tüm mesajlarını
+     * kronolojik sırayla (id artan) kullanıyoruz; hangi turun kime ait olduğunu HER turun kendi
+     * ASSISTANT cevaplarına (answersByParent) bakarak buluyoruz, pointer zincirine güvenmiyoruz.
      */
-    private List<AiMessage> buildContext(Long conversationId, Message leaf) {
-        List<Message> allMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
-        Map<Long, Message> byId = new HashMap<>();
-        allMessages.forEach(m -> byId.put(m.getId(), m));
-        // leaf henüz allMessages listesinde olmayabilir (aynı transaction içinde yeni save edildi ama
-        // flush garantisi yoksa), güvenlik için ekleyelim.
-        byId.putIfAbsent(leaf.getId(), leaf);
+    private List<AiMessage> buildContext(Conversation conversation, Message leaf, AiProvider targetProvider) {
+        List<Message> allMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());
 
-        List<Message> path = new ArrayList<>();
-        Long currentId = leaf.getId();
-        while (currentId != null) {
-            Message current = byId.get(currentId);
-            if (current == null) break;
-            path.add(current);
-            currentId = current.getParentMessage() != null ? current.getParentMessage().getId() : null;
-        }
-        Collections.reverse(path);
-
-        return path.stream()
-                .map(m -> AiMessage.builder().role(m.getRole()).content(m.getContent()).build())
+        // leaf (az önce kaydedilen kullanıcı mesajı) listede olsun/olmasın, geçmişi ondan
+        // KESİN olarak ayırmak için id'sine göre filtreliyoruz; leaf'i sona ayrıca ekliyoruz.
+        List<Message> history = allMessages.stream()
+                .filter(m -> m.getId() < leaf.getId())
                 .collect(Collectors.toList());
+
+        boolean compareMode = "COMPARE".equalsIgnoreCase(conversation.getMode());
+
+        Map<Long, List<Message>> answersByParent = history.stream()
+                .filter(m -> m.getRole() == Role.ASSISTANT && m.getParentMessage() != null)
+                .collect(Collectors.groupingBy(m -> m.getParentMessage().getId()));
+
+        List<AiMessage> context = new ArrayList<>();
+
+        for (Message m : history) {
+            if (m.getRole() != Role.USER) continue;
+            List<Message> answers = answersByParent.get(m.getId());
+            if (answers == null || answers.isEmpty()) continue; // henüz cevaplanmamış bir tur -> context'e taşınacak bir şey yok
+
+            if (compareMode) {
+                context.add(AiMessage.builder().role(Role.USER).content(m.getContent()).build());
+                String merged = answers.stream()
+                        .sorted(Comparator.comparing(Message::getId))
+                        .map(a -> "[" + providerLabel(a.getAiProvider()) + "]: " + a.getContent())
+                        .collect(Collectors.joining("\n\n"));
+                context.add(AiMessage.builder().role(Role.ASSISTANT).content(merged).build());
+            } else {
+                Message ownAnswer = answers.stream()
+                        .filter(a -> a.getAiProvider() == targetProvider)
+                        .findFirst()
+                        .orElse(null);
+                if (ownAnswer == null) continue; // bu turu targetProvider cevaplamamış -> soru dahil hiç görmesin
+                context.add(AiMessage.builder().role(Role.USER).content(m.getContent()).build());
+                context.add(AiMessage.builder().role(Role.ASSISTANT).content(ownAnswer.getContent()).build());
+            }
+        }
+
+        context.add(AiMessage.builder().role(Role.USER).content(leaf.getContent()).build());
+        return context;
+    }
+
+    private String providerLabel(AiProvider provider) {
+        if (provider == null) return "Bilinmeyen";
+        return switch (provider) {
+            case CLAUDE -> "Claude";
+            case OPENAI -> "ChatGPT";
+            case GEMINI -> "Gemini";
+        };
     }
 
     private ConversationResponse toConversationResponse(Conversation conversation) {
