@@ -81,11 +81,12 @@ const NewChat = () => {
               />
               <div>
                 <strong>Compare Chat</strong>
-                <p>Yapay zekalar ortak konuşma bağlamını paylaşır; biri diğerinin cevabını da okuyabilir.</p>
+                <p>Her mesaj otomatik olarak tüm yapay zekalara gider; hangi cevabı tercih ettiğini
+                  işaretleyebilirsin, sonraki turda hepsi bu tercihi görür.</p>
                 <span className="mode-soon">
-                  <Info size={12} /> Örn: Claude'a sorduğun soruyu, sonra "ChatGPT ile devam et" deyip
-                  hiçbir şey açıklamadan "sen ne düşünüyorsun?" diye sorduğunda ChatGPT, Claude'un o
-                  soruya verdiği cevabı da bağlamında görür.
+                  <Info size={12} /> Örn: Bir soru sorduğunda ChatGPT, Claude ve Gemini aynı anda cevap verir.
+                  Gemini'nin cevabını beğenip "tercih et" dersen, bir sonraki mesajında üçü de bunu bilerek
+                  cevap verir — hâlâ üçü de cevaplar, ama Gemini'nin yaklaşımını dikkate alarak.
                 </span>
               </div>
             </label>

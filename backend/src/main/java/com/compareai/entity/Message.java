@@ -45,6 +45,12 @@ public class Message {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
+    // Compare modunda kullanıcının bu turdaki cevaplar arasından "tercih ettiği" cevap mı?
+    // Sadece role=ASSISTANT mesajlarda anlamlıdır. Bir turda aynı anda en fazla bir tane
+    // true olabilir (bkz. ChatService#preferAnswer - yeni seçim yapılınca kardeşleri false'a çekilir).
+    @Column(nullable = false)
+    private boolean selected = false;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

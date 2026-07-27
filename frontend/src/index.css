@@ -254,6 +254,39 @@ body {
   cursor: not-allowed;
 }
 
+.prefer-btn {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: none;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.prefer-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.prefer-btn.preferred {
+  background: var(--card-color, #eef2ff);
+  border-color: var(--card-border, #4f46e5);
+  color: var(--card-text, #4338ca) !important;
+}
+
+.ai-card:has(.prefer-btn.preferred) {
+  box-shadow: 0 0 0 2px var(--card-color, #4f46e5);
+}
+
+.compare-banner {
+  background: #f0f9ff;
+  color: #0369a1;
+  border-color: #bae6fd;
+}
+
 .card-live-badge {
   margin-left: auto;
   align-self: flex-start;

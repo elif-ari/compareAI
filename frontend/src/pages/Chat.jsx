@@ -164,6 +164,25 @@ const Chat = () => {
     setBranchAnchorId(null);
   };
 
+  // COMPARE modu: kullanıcı bir turdaki cevaplardan birini "tercih ettim" diye işaretler.
+  // Bu, HEAD'i taşımaz ve bundan sonraki mesajın kime gideceğini DEĞİŞTİRMEZ - hep üçüne
+  // birden gider (bkz. handleSendMessage). Sadece bu tercihi backend'e kaydeder; backend
+  // bir sonraki turda bunu TÜM sağlayıcıların göreceği ortak context'e ekler
+  // (bkz. ChatService#buildContext / COMPARE_SYSTEM_HINT).
+  const handlePreferAnswer = async (aiMessage) => {
+    if (!conversationId || !aiMessage || isLoading) return;
+    try {
+      const res = await axios.post(`${API_BASE}/conversations/${conversationId}/prefer`, {
+        messageId: aiMessage.id,
+      });
+      const updatedById = new Map(res.data.map((m) => [m.id, m]));
+      setMessages((prev) => prev.map((m) => (updatedById.has(m.id) ? updatedById.get(m.id) : m)));
+    } catch (error) {
+      console.error("Tercih kaydedilemedi:", error);
+      alert("Tercih kaydedilemedi. Konsolu kontrol et.");
+    }
+  };
+
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -203,6 +222,16 @@ const Chat = () => {
 
       <div className="main-content">
         <div className="input-section">
+          {mode === CHAT_MODES.COMPARE && (
+            <div className="branch-banner compare-banner">
+              <Radio size={14} />
+              <span>
+                Her mesaj otomatik olarak tüm seçili yapay zekalara gidiyor. Bir cevabı beğendiğinde
+                kartın altındaki <strong>"Bu cevabı tercih et"</strong> butonuna basabilirsin — sonraki
+                turda hepsi bu tercihini görür.
+              </span>
+            </div>
+          )}
           {activeBranchDefinition && (
             <div className="branch-banner">
               <Radio size={14} />
@@ -243,8 +272,7 @@ const Chat = () => {
 
             const aiMessage = getAiMessage(provider.backendProvider);
             const hasAnyHistory = !!getLatestMessageForProvider(provider.backendProvider);
-            const canContinueWith =
-              mode === CHAT_MODES.COMPARE ? !!currentTurn.userMessage : hasAnyHistory;
+            const canContinueWith = hasAnyHistory;
             return (
               <div
                 key={provider.id}
@@ -272,14 +300,25 @@ const Chat = () => {
                     : "Cevap alınamadı."}
                 </div>
                 <div className="card-footer">
-                  <button
-                    className="continue-btn"
-                    style={{ color: palette.text, borderColor: palette.border }}
-                    onClick={() => handleContinueWith(provider.backendProvider)}
-                    disabled={!canContinueWith || isActiveBranch}
-                  >
-                    {isActiveBranch ? "Şu an bu sağlayıcıdasın" : `${provider.name} ile devam et →`}
-                  </button>
+                  {mode === CHAT_MODES.COMPARE ? (
+                    <button
+                      className={`prefer-btn ${aiMessage?.selected ? "preferred" : ""}`}
+                      style={{ color: palette.text, borderColor: palette.border }}
+                      onClick={() => handlePreferAnswer(aiMessage)}
+                      disabled={!aiMessage || isLoading}
+                    >
+                      {aiMessage?.selected ? "✓ Tercih edildi" : "Bu cevabı tercih et"}
+                    </button>
+                  ) : (
+                    <button
+                      className="continue-btn"
+                      style={{ color: palette.text, borderColor: palette.border }}
+                      onClick={() => handleContinueWith(provider.backendProvider)}
+                      disabled={!canContinueWith || isActiveBranch}
+                    >
+                      {isActiveBranch ? "Şu an bu sağlayıcıdasın" : `${provider.name} ile devam et →`}
+                    </button>
+                  )}
                 </div>
               </div>
             );

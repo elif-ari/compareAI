@@ -21,6 +21,9 @@ public class MessageResponse {
 
     private String content;
 
+    // Compare modunda: kullanıcı bu cevabı o turda "tercih ettim" diye işaretlediyse true.
+    private boolean selected;
+
     private LocalDateTime createdAt;
 
 }
