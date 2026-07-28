@@ -14,6 +14,11 @@ public class ChatRequest {
 
     private Long conversationId;
 
+    // Yeni konusma acilirken (conversationId bos oldugunda) bu konusmanin sahibi olacak
+    // kullanici. Var olan bir konusmaya devam ederken gonderilmesine gerek yok, zaten
+    // Conversation uzerinde saklaniyor.
+    private Long userId;
+
     // Yeni mesaj hangi mesajın devamı?
     // İlk mesaj ise null olabilir.
     private Long parentMessageId;

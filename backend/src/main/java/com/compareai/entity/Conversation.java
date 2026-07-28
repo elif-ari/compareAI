@@ -22,6 +22,12 @@ public class Conversation {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // Bu konusma hangi kullaniciya ait (app_users.id). Dashboard'daki "Sohbet Gecmisi"
+    // listesi bu alana gore filtrelenir. Eski/test verilerinde null olabilecegi icin
+    // nullable birakildi, ama yeni konusmalar ChatService uzerinden hep bir userId ile acilir.
+    @Column(name = "user_id")
+    private Long userId;
+
     // Kullanici baslik girmezse otomatik bir baslik atanabilir (ilk mesajdan turetilerek)
     @Column(nullable = false, length = 255)
     private String title;

@@ -1,22 +1,28 @@
-import { useState, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Send, Loader2, Plus, Settings2, LogOut, Radio, X } from "lucide-react";
 import axios from "axios";
-import { getProviderById, CARD_PALETTE, CHAT_MODES } from "../data/aiCatalog";
+import { getProviderById, getProviderByBackendName, CARD_PALETTE, CHAT_MODES } from "../data/aiCatalog";
 import { useSelection } from "../context/SelectionContext";
 import { useAuth } from "../context/AuthContext";
+import { fetchConversation } from "../services/chatApi";
 
 const API_BASE = "http://localhost:8080/api/chat";
 
 const Chat = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const conversationIdFromUrl = searchParams.get("conversationId");
   const { user, logout } = useAuth();
-  const { providers: selectedIds, mode } = useSelection();
+  const { providers: selectedIds, mode, setSelection } = useSelection();
 
   const providers = useMemo(() => selectedIds.map(getProviderById).filter(Boolean), [selectedIds]);
 
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  // Kaydedilmiş bir sohbet URL'den açılıyorsa, mesajlar backend'den gelene kadar kartlarda
+  // "Mesajınızı bekliyor..." yerine bir yükleniyor durumu gösterilir.
+  const [isLoadingHistory, setIsLoadingHistory] = useState(!!conversationIdFromUrl);
 
   // Aktif konuşma durumu
   const [conversationId, setConversationId] = useState(null);
@@ -36,6 +42,36 @@ const Chat = () => {
     () => providers.find((p) => p.backendProvider === activeBranchProvider),
     [providers, activeBranchProvider]
   );
+
+  // Bu efekt yalnızca sayfa "?conversationId=..." ile açıldığında (Dashboard'daki geçmişten
+  // tıklandığında) bir kez çalışır: konuşmayı tüm mesajlarıyla getirir, kartların doğru
+  // sağlayıcılarla/moda göre çizilmesi için SelectionContext'i o konuşmanın kendi
+  // providers/mode bilgisiyle günceller ve HEAD'i (currentMessageId) ayarlar.
+  const didLoadHistoryRef = useRef(false);
+  useEffect(() => {
+    if (!conversationIdFromUrl || didLoadHistoryRef.current) return;
+    didLoadHistoryRef.current = true;
+
+    (async () => {
+      try {
+        const conversation = await fetchConversation(conversationIdFromUrl);
+        const restoredProviderIds = (conversation.providers || [])
+          .map((backendName) => getProviderByBackendName(backendName)?.id)
+          .filter(Boolean);
+
+        setSelection(restoredProviderIds, conversation.mode);
+        setConversationId(conversation.id);
+        setMessages(conversation.messages || []);
+        setHeadId(conversation.currentMessageId);
+      } catch (error) {
+        console.error("Sohbet geçmişi yüklenemedi:", error);
+        alert("Bu sohbet yüklenemedi, dashboard'a yönlendiriliyorsun.");
+        navigate("/dashboard");
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    })();
+  }, [conversationIdFromUrl, setSelection, navigate]);
 
   // Şu anki HEAD'e göre gösterilecek "tur"u (son kullanıcı mesajı + ona bağlı AI cevapları) hesapla.
   const currentTurn = useMemo(() => {
@@ -92,6 +128,7 @@ const Chat = () => {
         // böylece Conversation bu bilgilerle oluşturulur.
         payload.providers = selectedIds.map((id) => getProviderById(id)?.backendProvider).filter(Boolean);
         payload.mode = mode;
+        payload.userId = user?.id;
       }
       if (activeBranchProvider !== null) {
         // Hedef sağlayıcıyı backend'e AÇIKÇA söylüyoruz (bkz. ChatRequest#targetProvider).
@@ -198,12 +235,10 @@ const Chat = () => {
           <span className="header-divider">·</span>
           <span>
             <strong>{providers.length}</strong> model seçili
-            {mode === CHAT_MODES.COMPARE && (
-              <>
-                {" "}
-                · <strong>Compare Chat</strong>
-              </>
-            )}
+                      {" · "}
+                      <strong>
+              {mode === CHAT_MODES.COMPARE ? "Compare Chat" : "Independent Chat"}
+            </strong>
           </span>
           <button className="icon-btn" onClick={() => navigate("/new-chat")} title="Yeni sohbet">
             <Plus size={16} />
@@ -255,9 +290,9 @@ const Chat = () => {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isLoading}
+              disabled={isLoading || isLoadingHistory}
             />
-            <button className="send-btn" onClick={handleSendMessage} disabled={isLoading}>
+            <button className="send-btn" onClick={handleSendMessage} disabled={isLoading || isLoadingHistory}>
               {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
           </div>
@@ -291,7 +326,9 @@ const Chat = () => {
                   </div>
                 </div>
                 <div className="card-body">
-                  {!currentTurn.userMessage
+                  {isLoadingHistory
+                    ? "Sohbet geçmişi yükleniyor..."
+                    : !currentTurn.userMessage
                     ? "Mesajınızı bekliyor..."
                     : aiMessage
                     ? aiMessage.content

@@ -1,9 +1,11 @@
 package com.compareai.controller;
 
 import com.compareai.dto.request.ChatRequest;
+import com.compareai.dto.request.RenameConversationRequest;
 import com.compareai.dto.request.SelectMessageRequest;
 import com.compareai.dto.response.ChatResponse;
 import com.compareai.dto.response.ConversationResponse;
+import com.compareai.dto.response.ConversationSummaryResponse;
 import com.compareai.dto.response.MessageResponse;
 import com.compareai.service.ChatService;
 import jakarta.validation.Valid;
@@ -30,10 +32,30 @@ public class ChatController {
         return chatService.sendMessage(request);
     }
 
+    // Dashboard'daki "Sohbet Geçmişi" listesi: bir kullanıcıya ait tüm konuşmaları
+    // (en yeniden en eskiye) özet halinde getirir.
+    @GetMapping("/conversations")
+    public List<ConversationSummaryResponse> listConversations(@RequestParam Long userId) {
+        return chatService.listConversations(userId);
+    }
+
     // Bir konuşmanın TÜM dallarıyla birlikte tam halini getirir (aynı konuşmaya devam ederken kullanılır).
     @GetMapping("/conversations/{conversationId}")
     public ConversationResponse getConversation(@PathVariable Long conversationId) {
         return chatService.getConversation(conversationId);
+    }
+
+    // Dashboard'da bir konuşmanın başlığını düzenler.
+    @PatchMapping("/conversations/{conversationId}")
+    public ConversationSummaryResponse renameConversation(@PathVariable Long conversationId,
+                                                            @Valid @RequestBody RenameConversationRequest request) {
+        return chatService.renameConversation(conversationId, request);
+    }
+
+    // Dashboard'da bir konuşmayı (tüm mesajlarıyla birlikte) siler.
+    @DeleteMapping("/conversations/{conversationId}")
+    public void deleteConversation(@PathVariable Long conversationId) {
+        chatService.deleteConversation(conversationId);
     }
 
     // Kullanıcı "bu cevaptan devam etmek istiyorum" dediğinde HEAD'i o mesaja taşır (git checkout gibi).

@@ -3,6 +3,7 @@ package com.compareai.dto.response;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -15,4 +16,11 @@ public class ConversationSummaryResponse {
     private String title;
 
     private LocalDateTime createdAt;
+
+    // Bu konusmada secilmis olan saglayicilar (orn. ["OPENAI","CLAUDE"]) - dashboard'da
+    // kucuk rozet olarak gosterilir.
+    private List<String> providers;
+
+    // INDEPENDENT | COMPARE
+    private String mode;
 }

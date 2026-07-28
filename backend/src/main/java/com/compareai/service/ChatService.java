@@ -5,9 +5,11 @@ import com.compareai.dto.ai.AiClientResponse;
 import com.compareai.dto.ai.AiMessage;
 import com.compareai.dto.ai.AiRequest;
 import com.compareai.dto.request.ChatRequest;
+import com.compareai.dto.request.RenameConversationRequest;
 import com.compareai.dto.request.SelectMessageRequest;
 import com.compareai.dto.response.ChatResponse;
 import com.compareai.dto.response.ConversationResponse;
+import com.compareai.dto.response.ConversationSummaryResponse;
 import com.compareai.dto.response.MessageResponse;
 import com.compareai.entity.AiProvider;
 import com.compareai.entity.Conversation;
@@ -263,6 +265,34 @@ public class ChatService {
         return toConversationResponse(conversation);
     }
 
+    /**
+     * Dashboard'daki "Sohbet Geçmişi" listesi için: bir kullanıcının tüm konuşmalarını
+     * en yeniden en eskiye doğru, özet halinde döner (mesaj içerikleri dahil değildir).
+     */
+    @Transactional(readOnly = true)
+    public List<ConversationSummaryResponse> listConversations(Long userId) {
+        return conversationRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
+                .map(this::toConversationSummaryResponse)
+                .collect(Collectors.toList());
+    }
+
+    // Kullanıcı Dashboard'da bir konuşmanın başlığını düzenlediğinde çağrılır.
+    @Transactional
+    public ConversationSummaryResponse renameConversation(Long conversationId, RenameConversationRequest request) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        conversation.setTitle(request.getTitle().trim());
+        conversationRepository.save(conversation);
+        return toConversationSummaryResponse(conversation);
+    }
+
+    // Kullanıcı Dashboard'da bir konuşmayı sildiğinde çağrılır. Conversation.messages
+    // cascade=ALL/orphanRemoval=true olduğu için ilişkili tüm mesajlar da otomatik silinir.
+    @Transactional
+    public void deleteConversation(Long conversationId) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        conversationRepository.delete(conversation);
+    }
+
     // ---- yardımcı metodlar ----
 
     private Conversation resolveConversation(ChatRequest request) {
@@ -271,6 +301,7 @@ public class ChatService {
         }
         Conversation conversation = new Conversation();
         conversation.setTitle(generateTitle(request.getPrompt()));
+        conversation.setUserId(request.getUserId());
         if (request.getProviders() != null && !request.getProviders().isEmpty()) {
             conversation.setProviders(String.join(",", request.getProviders()));
         }
@@ -438,9 +469,28 @@ public class ChatService {
         return ConversationResponse.builder()
                 .id(conversation.getId())
                 .title(conversation.getTitle())
+                .providers(splitProviders(conversation.getProviders()))
+                .mode(conversation.getMode())
                 .currentMessageId(conversation.getCurrentMessageId())
                 .messages(messageResponses)
                 .build();
+    }
+
+    private ConversationSummaryResponse toConversationSummaryResponse(Conversation conversation) {
+        return ConversationSummaryResponse.builder()
+                .id(conversation.getId())
+                .title(conversation.getTitle())
+                .createdAt(conversation.getCreatedAt())
+                .providers(splitProviders(conversation.getProviders()))
+                .mode(conversation.getMode())
+                .build();
+    }
+
+    private List<String> splitProviders(String providersCsv) {
+        if (providersCsv == null || providersCsv.isBlank()) {
+            return List.of();
+        }
+        return List.of(providersCsv.split(","));
     }
 
     private MessageResponse toMessageResponse(Message message) {

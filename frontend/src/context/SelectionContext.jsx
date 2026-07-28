@@ -62,6 +62,19 @@ export const SelectionProvider = ({ children }) => {
     [providers, persist]
   );
 
+  // Kaydedilmiş bir sohbet geçmişten açıldığında, o konuşmanın kendi providers/mode
+  // bilgisiyle seçim durumunu tek seferde (toggle toggle yapmadan) günceller.
+  const setSelection = useCallback(
+    (nextProviders, nextMode) => {
+      const safeProviders = nextProviders || [];
+      const safeMode = nextMode || CHAT_MODES.INDEPENDENT;
+      setProviders(safeProviders);
+      setModeState(safeMode);
+      persist(safeProviders, safeMode);
+    },
+    [persist]
+  );
+
   const isValidSelection = providers.length >= MIN_SELECTION;
 
   return (
@@ -71,6 +84,7 @@ export const SelectionProvider = ({ children }) => {
         mode,
         toggleProvider,
         setMode,
+        setSelection,
         isValidSelection,
       }}
     >
