@@ -92,7 +92,15 @@ public class ChatService {
         //      işaretler, bkz. preferAnswer). Bu yüzden frontend ne gönderirse göndersin burada eziyoruz.
         //    - Değilse (INDEPENDENT) request.askAllProviders'a, o da yoksa eski çıkarım mantığına uy.
         boolean isCompareMode = "COMPARE".equalsIgnoreCase(conversation.getMode());
-        Boolean effectiveAskAllProviders = isCompareMode ? Boolean.TRUE : request.getAskAllProviders();
+        boolean hasExplicitCardTarget = request.getTargetProvider() != null && !request.getTargetProvider().isBlank();
+        // COMPARE modunda varsayılan kural hâlâ "her turda 3'üne de sor"dur. TEK istisna: kullanıcı
+        // bir kartın kendi mini soru barından (bkz. frontend Chat.jsx handleCardSend) AÇIKÇA
+        // targetProvider belirterek tek bir sağlayıcıya soru sormuşsa (örn. "Gemini bunu söyledi,
+        // sen ne düşünüyorsun" diye sadece Claude'a sorması), o turda SADECE o sağlayıcıya sorulur.
+        // Bu, konuşmanın genel COMPARE modunu DEĞİŞTİRMEZ - bir sonraki üst bar mesajı yine 3'üne birden gider.
+        Boolean effectiveAskAllProviders = isCompareMode
+                ? (hasExplicitCardTarget ? Boolean.FALSE : Boolean.TRUE)
+                : request.getAskAllProviders();
         List<AiClient> targetClients = resolveTargetClients(parentMessage, effectiveAskAllProviders, request.getTargetProvider());
 
         // 3) Seçilen sağlayıcılara AYNI ANDA (paralel) istek at.
@@ -364,11 +372,21 @@ public class ChatService {
             "cevaplarını yan yana görüyor ve içlerinden birini o turun tercih ettiği cevap olarak " +
             "işaretleyebiliyor. Kullanıcının bir sonraki mesajından önce sana, önceki turların özetini " +
             "(hangi sağlayıcının ne cevap verdiğini ve kullanıcının hangisini tercih ettiğini) referans amaçlı " +
-            "bilgi olarak vereceğim - bu özet SENİN daha önce söylediğin bir şey DEĞİLDİR, sadece bağlam içindir. " +
-            "Kullanıcının tercih ettiği cevabı dikkate alarak (beğendiği yaklaşım/üslup/detay seviyesini devam " +
-            "ettirerek) yeni soruyu cevapla. ÇOK ÖNEMLİ: cevabında ASLA \"[ChatGPT]\", \"[Claude]\", \"[Gemini]\" " +
-            "gibi etiketler kullanma, başka bir sağlayıcı adına konuşma ya da referans özetini tekrar etme/kopyalama; " +
-            "sadece kendi kısa, doğal, tek bir cevabını yaz.";
+            "bilgi olarak vereceğim - bu özet SENİN daha önce söylediğin bir şey DEĞİLDİR, başka yapay zekaların " +
+            "cevaplarıdır, sadece bağlam içindir.\n\n" +
+            "TARTIŞMACI TUTUM: Diğer sağlayıcıların cevaplarını pasifçe kabul etme; onları eleştirel bir gözle " +
+            "değerlendir. Eğer bir sağlayıcının cevabında eksik, yanlış, yanıltıcı veya zayıf bir gerekçe " +
+            "görüyorsan bunu AÇIKÇA belirt ve neden katılmadığını kısaca gerekçelendir. Katıldığın bir noktayı da " +
+            "söyleyebilirsin ama sadece onaylamakla yetinme - kendi bağımsız değerlendirmeni yap, gerekirse farklı " +
+            "bir sonuca var. Kullanıcı seni açıkça başka bir sağlayıcının cevabıyla karşılaştırıyorsa (örn. " +
+            "\"Gemini şunu söyledi, sen ne düşünüyorsun\"), o cevaba doğrudan ve dürüstçe tepki ver: sadece nazikçe " +
+            "\"farklı bakış açıları olabilir\" deyip geçme, gerçekten doğru bulmadığın yeri söyle. Amaç kibarca " +
+            "hemfikir olmak değil, kullanıcıya en doğru/en iyi cevabı bulmakta yardımcı olacak gerçek bir tartışma " +
+            "ortamı sunmak. Yine de saygılı bir üslup kullan, diğer sağlayıcıyı aşağılama, sadece içeriği eleştir.\n\n" +
+            "ÇOK ÖNEMLİ: cevabında ASLA \"[ChatGPT]\", \"[Claude]\", \"[Gemini]\" gibi etiketler kullanma, başka bir " +
+            "sağlayıcı adına konuşma ya da referans özetini tekrar etme/kopyalama; kendi görüşünü, kendi doğal " +
+            "sesinle, tek bir cevap olarak yaz (diğer sağlayıcıdan bahsederken \"Gemini\", \"ChatGPT\" gibi ismini " +
+            "kullanabilirsin, bu yasak değil - yasak olan onun adına konuşmak/onun cevabını taklit etmek).";
 
     private List<AiMessage> buildContext(Conversation conversation, Message leaf, AiProvider targetProvider) {
         List<Message> allMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());

@@ -233,9 +233,205 @@ body {
   font-style: italic;
 }
 
-.card-footer {
+/* Kartın kendi bağımsız sohbet geçmişi - SMS/mesajlaşma benzeri baloncuklar */
+.card-thread {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 180px;
+  max-height: 420px;
+}
+
+.card-thread-empty {
+  margin: auto 0;
+  text-align: center;
+  color: #94a3b8;
+  font-style: italic;
+  font-size: 0.85rem;
   padding: 12px;
+}
+
+.thread-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bubble {
+  border-radius: 14px;
+  padding: 9px 13px;
+  font-size: 0.87rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  max-width: 92%;
+}
+
+.bubble-user {
+  align-self: flex-end;
+  background: #eef2ff;
+  color: #3730a3;
+  border-bottom-right-radius: 4px;
+}
+
+.bubble-ai {
+  align-self: flex-start;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  border-bottom-left-radius: 4px;
+  position: relative;
+}
+
+.bubble-ai-selected {
+  background: var(--card-color, #eef2ff);
+  border-color: var(--card-border, #4f46e5);
+}
+
+.bubble-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+
+.bubble-ai:hover .bubble-actions {
+  opacity: 1;
+}
+
+.bubble-selected-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--card-text, #4338ca);
+}
+
+.bubble-quote-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #64748b;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.bubble-quote-btn:hover {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.card-footer {
+  padding: 10px 12px;
   border-top: 1px solid #f1f5f9;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Kartın kendi mini soru barı: input + gönder + tercih et, tek satırda */
+.card-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.card-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  outline: none;
+  font-size: 0.82rem;
+}
+
+.card-input:focus {
+  border-color: var(--card-border, #c7d2fe);
+}
+
+.card-mini-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.card-mini-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.card-send-btn:not(:disabled):hover {
+  background: var(--card-color, #eef2ff);
+  border-color: var(--card-border, #c7d2fe);
+  color: var(--card-text, #4338ca);
+}
+
+.card-prefer-btn.preferred {
+  background: var(--card-color, #eef2ff);
+  border-color: var(--card-border, #4f46e5);
+  color: var(--card-text, #4338ca);
+}
+
+.ai-card:has(.card-prefer-btn.preferred) {
+  box-shadow: 0 0 0 2px var(--card-color, #4f46e5);
+}
+
+/* Tartışma Modu: hazır komut çipleri */
+.quick-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.quick-action-chip {
+  border: 1px dashed var(--card-border, #c7d2fe);
+  background: #fff;
+  color: var(--card-text, #4338ca);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.quick-action-chip:hover {
+  background: var(--card-color, #eef2ff);
+}
+
+/* Tartışma Modu aktifken referans alınan cevabın hedefi OLMAYAN kartları hafifçe vurgula */
+.ai-card.quote-target {
+  box-shadow: 0 0 0 2px var(--card-border, #c7d2fe);
+}
+
+.quote-banner {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.quote-banner strong {
+  color: #9a3412;
 }
 
 .continue-btn {
