@@ -71,7 +71,12 @@ public class ChatService {
     public ChatResponse sendMessage(ChatRequest request) {
 
         Conversation conversation = resolveConversation(request);
+
         Message parentMessage = resolveParentMessage(request, conversation);
+        boolean firstMessage =
+                conversation.getTitle() == null
+                        || conversation.getTitle().isBlank()
+                        || "Yeni Sohbet".equals(conversation.getTitle());
 
         // 1) Kullanıcı mesajını kaydet
         Message userMessage = new Message();
@@ -101,7 +106,8 @@ public class ChatService {
         Boolean effectiveAskAllProviders = isCompareMode
                 ? (hasExplicitCardTarget ? Boolean.FALSE : Boolean.TRUE)
                 : request.getAskAllProviders();
-        List<AiClient> targetClients = resolveTargetClients(parentMessage, effectiveAskAllProviders, request.getTargetProvider());
+        List<AiClient> targetClients = resolveTargetClients(
+                conversation, parentMessage, effectiveAskAllProviders, request.getTargetProvider());
 
         // 3) Seçilen sağlayıcılara AYNI ANDA (paralel) istek at.
         //    ÖNEMLİ: context artık her sağlayıcı için AYRI hesaplanıyor (buildContext'e bkz.) çünkü
@@ -120,6 +126,17 @@ public class ChatService {
         List<MessageResponse> aiResponses = futures.stream()
                 .map(CompletableFuture::join)
                 .collect(Collectors.toList());
+        if (firstMessage) {
+            try {
+                String title = generateConversationTitle(request.getPrompt());
+
+                if (!title.isBlank()) {
+                    conversation.setTitle(title);
+                    conversationRepository.save(conversation);
+                }
+            } catch (Exception ignored) {
+            }
+        }
 
         return ChatResponse.builder()
                 .conversationId(conversation.getId())
@@ -139,7 +156,8 @@ public class ChatService {
      *                         null  -> eski davranışa düş: parent ASSISTANT ise tek sağlayıcı, değilse 3'ü de
      * @param targetProviderStr askAllProviders=false olduğunda hangi sağlayıcının cevap vereceği (bkz. ChatRequest#targetProvider)
      */
-    private List<AiClient> resolveTargetClients(Message parentMessage, Boolean askAllProviders, String targetProviderStr) {
+    private List<AiClient> resolveTargetClients(Conversation conversation, Message parentMessage,
+                                                Boolean askAllProviders, String targetProviderStr) {
         boolean wantsSingleProvider;
 
         if (askAllProviders != null) {
@@ -157,7 +175,32 @@ public class ChatService {
             return List.of(singleClient);
         }
 
-        return new ArrayList<>(clientMap.values());
+        return resolveConfiguredClients(conversation);
+    }
+
+    private List<AiClient> resolveConfiguredClients(Conversation conversation) {
+        if (conversation.getProviders() == null || conversation.getProviders().isBlank()) {
+            return new ArrayList<>(clientMap.values());
+        }
+
+        List<AiClient> configuredClients = new ArrayList<>();
+        for (String providerName : conversation.getProviders().split(",")) {
+            try {
+                AiProvider provider = AiProvider.valueOf(providerName.trim().toUpperCase());
+                AiClient client = clientMap.get(provider);
+                if (client != null) {
+                    configuredClients.add(client);
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Ignore unknown providers saved by an old or invalid conversation.
+            }
+        }
+
+        if (configuredClients.isEmpty()) {
+            throw new InvalidBranchOperationException(
+                    "No usable AI provider is configured for this conversation.");
+        }
+        return configuredClients;
     }
 
     /**
@@ -196,6 +239,50 @@ public class ChatService {
 
         Message saved = messageRepository.save(aiMessage);
         return toMessageResponse(saved);
+    }
+    private String generateConversationTitle(String firstPrompt) {
+
+        AiClient openAi = clientMap.get(AiProvider.OPENAI);
+
+        if (openAi == null) {
+            return firstPrompt.length() > 60
+                    ? firstPrompt.substring(0, 60)
+                    : firstPrompt;
+        }
+
+        AiRequest request = AiRequest.builder()
+                .messages(List.of(
+                        AiMessage.builder()
+                                .role(Role.SYSTEM)
+                                .content("""
+                                    You generate titles for chat conversations.
+
+                                    Rules:
+                                    - Maximum 5 words.
+                                    - Use concise keywords.
+                                    - Language must match the user's language.
+                                    - Do not use quotation marks.
+                                    - Do not end with punctuation.
+                                    - Return ONLY the title.
+                                    """)
+                                .build(),
+
+                        AiMessage.builder()
+                                .role(Role.USER)
+                                .content(firstPrompt)
+                                .build()
+                ))
+                .build();
+
+        try {
+            return openAi.sendPrompt(request)
+                    .getContent()
+                    .trim();
+        } catch (Exception e) {
+            return firstPrompt.length() > 60
+                    ? firstPrompt.substring(0, 60)
+                    : firstPrompt;
+        }
     }
 
     /**
@@ -308,7 +395,7 @@ public class ChatService {
             return getConversationOrThrow(request.getConversationId());
         }
         Conversation conversation = new Conversation();
-        conversation.setTitle(generateTitle(request.getPrompt()));
+        conversation.setTitle("Yeni Sohbet");
         conversation.setUserId(request.getUserId());
         if (request.getProviders() != null && !request.getProviders().isEmpty()) {
             conversation.setProviders(String.join(",", request.getProviders()));
@@ -388,6 +475,21 @@ public class ChatService {
             "sesinle, tek bir cevap olarak yaz (diğer sağlayıcıdan bahsederken \"Gemini\", \"ChatGPT\" gibi ismini " +
             "kullanabilirsin, bu yasak değil - yasak olan onun adına konuşmak/onun cevabını taklit etmek).";
 
+    private static final String DEVELOPER_SYSTEM_HINT = """
+            Act as a senior software engineer and practical technical mentor.
+            Reply in the user's language with a concise, clear, easy-to-scan answer. Lead with the direct answer,
+            then add only the most important details. For software questions, provide focused code or commands only
+            when useful, and keep examples minimal. Mention assumptions, edge cases, validation, security, or error
+            handling only when they materially affect the solution. Prefer maintainable, production-aware solutions
+            over vague high-level advice. Do not invent APIs, files, or results;
+            clearly label uncertainty and ask a concise follow-up only when required information is missing.
+            For non-technical questions, remain helpful and concise without forcing code into the response.
+            """;
+
+    private static final int MAX_COMPARE_CONTEXT_TURNS = 6;
+    private static final int MAX_INDEPENDENT_CONTEXT_TURNS = 12;
+    private static final int MAX_CONTEXT_ANSWER_CHARS = 4_000;
+
     private List<AiMessage> buildContext(Conversation conversation, Message leaf, AiProvider targetProvider) {
         List<Message> allMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());
 
@@ -404,19 +506,41 @@ public class ChatService {
                 .collect(Collectors.groupingBy(m -> m.getParentMessage().getId()));
 
         return compareMode
-                ? buildCompareContext(history, answersByParent, leaf)
+                ? buildCompareContext(history, answersByParent, leaf, targetProvider)
                 : buildIndependentContext(history, answersByParent, leaf, targetProvider);
     }
 
+    private String providerIdentityHint(AiProvider targetProvider) {
+        String providerName = providerLabel(targetProvider);
+        return "You are " + providerName + ". In the comparison reference, any answer labeled \""
+                + providerName + "\" is your own earlier answer, not another model's answer. Never critique,"
+                + " grade, or debate your own earlier answer. Only evaluate answers from other providers. If the"
+                + " user asks about your own earlier answer, answer the new request directly without framing it"
+                + " as a self-critique.";
+    }
+
     private List<AiMessage> buildCompareContext(List<Message> history, Map<Long, List<Message>> answersByParent,
-                                                 Message leaf) {
+                                                  Message leaf, AiProvider targetProvider) {
         StringBuilder referenceBlock = new StringBuilder();
         boolean hasAnsweredHistory = false;
+        List<AiMessage> context = new ArrayList<>();
+        context.add(AiMessage.builder()
+                .role(Role.SYSTEM)
+                .content(DEVELOPER_SYSTEM_HINT + "\n\n" + COMPARE_SYSTEM_HINT + "\n\n"
+                        + providerIdentityHint(targetProvider))
+                .build());
+
+        long answeredTurnCount = history.stream()
+                .filter(m -> m.getRole() == Role.USER && answersByParent.containsKey(m.getId()))
+                .count();
+        long skippedTurnCount = Math.max(0, answeredTurnCount - MAX_COMPARE_CONTEXT_TURNS);
+        long processedTurnCount = 0;
 
         for (Message m : history) {
             if (m.getRole() != Role.USER) continue;
             List<Message> answers = answersByParent.get(m.getId());
             if (answers == null || answers.isEmpty()) continue;
+            if (processedTurnCount++ < skippedTurnCount) continue;
 
             hasAnsweredHistory = true;
             referenceBlock.append("Soru: ").append(m.getContent()).append("\n");
@@ -425,18 +549,15 @@ public class ChatService {
                     .forEach(a -> referenceBlock.append("- ")
                             .append(providerLabel(a.getAiProvider()))
                             .append(a.isSelected() ? " (kullanıcının tercih ettiği cevap): " : ": ")
-                            .append(a.getContent())
+                            .append(truncateForContext(a.getContent()))
                             .append("\n"));
             referenceBlock.append("\n");
         }
 
-        List<AiMessage> context = new ArrayList<>();
         if (!hasAnsweredHistory) {
             context.add(AiMessage.builder().role(Role.USER).content(leaf.getContent()).build());
             return context;
         }
-
-        context.add(AiMessage.builder().role(Role.SYSTEM).content(COMPARE_SYSTEM_HINT).build());
 
         String userTurn = "=== Önceki karşılaştırma turları (REFERANS içindir, bunlar senin sözlerin değildir) ===\n\n"
                 + referenceBlock
@@ -449,6 +570,14 @@ public class ChatService {
     private List<AiMessage> buildIndependentContext(List<Message> history, Map<Long, List<Message>> answersByParent,
                                                       Message leaf, AiProvider targetProvider) {
         List<AiMessage> context = new ArrayList<>();
+        context.add(AiMessage.builder().role(Role.SYSTEM).content(DEVELOPER_SYSTEM_HINT).build());
+        long ownAnsweredTurnCount = history.stream()
+                .filter(m -> m.getRole() == Role.USER)
+                .filter(m -> answersByParent.getOrDefault(m.getId(), List.of()).stream()
+                        .anyMatch(a -> a.getAiProvider() == targetProvider))
+                .count();
+        long skippedTurnCount = Math.max(0, ownAnsweredTurnCount - MAX_INDEPENDENT_CONTEXT_TURNS);
+        long processedTurnCount = 0;
 
         for (Message m : history) {
             if (m.getRole() != Role.USER) continue;
@@ -459,14 +588,22 @@ public class ChatService {
                     .filter(a -> a.getAiProvider() == targetProvider)
                     .findFirst()
                     .orElse(null);
+            if (ownAnswer != null && processedTurnCount++ < skippedTurnCount) continue;
             if (ownAnswer == null) continue; // bu turu targetProvider cevaplamamış -> soru dahil hiç görmesin
 
             context.add(AiMessage.builder().role(Role.USER).content(m.getContent()).build());
-            context.add(AiMessage.builder().role(Role.ASSISTANT).content(ownAnswer.getContent()).build());
+            context.add(AiMessage.builder().role(Role.ASSISTANT).content(truncateForContext(ownAnswer.getContent())).build());
         }
 
         context.add(AiMessage.builder().role(Role.USER).content(leaf.getContent()).build());
         return context;
+    }
+
+    private String truncateForContext(String content) {
+        if (content == null || content.length() <= MAX_CONTEXT_ANSWER_CHARS) {
+            return content;
+        }
+        return content.substring(0, MAX_CONTEXT_ANSWER_CHARS) + "\n[Earlier answer truncated for context]";
     }
 
     private String providerLabel(AiProvider provider) {

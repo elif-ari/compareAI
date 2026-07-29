@@ -63,6 +63,14 @@ const Chat = () => {
   // tıklandığında) bir kez çalışır: konuşmayı tüm mesajlarıyla getirir, kartların doğru
   // sağlayıcılarla/moda göre çizilmesi için SelectionContext'i o konuşmanın kendi
   // providers/mode bilgisiyle günceller ve HEAD'i (currentMessageId) ayarlar.
+
+  // Compare'dan Independent'a geçildiğinde Compare'a ait geçici state'i temizle.
+  useEffect(() => {
+    if (mode !== CHAT_MODES.COMPARE) {
+      setQuotedRef(null);
+    }
+  }, [mode]);
+
   const didLoadHistoryRef = useRef(false);
   useEffect(() => {
     if (!conversationIdFromUrl || didLoadHistoryRef.current) return;
@@ -375,7 +383,7 @@ const Chat = () => {
               </span>
             </div>
           )}
-          {quotedRef && (
+          {mode === CHAT_MODES.COMPARE && quotedRef && (
             <div className="branch-banner quote-banner">
               <Quote size={14} />
               <span>
@@ -389,7 +397,7 @@ const Chat = () => {
               </button>
             </div>
           )}
-          {activeBranchDefinition && (
+          {mode === CHAT_MODES.COMPARE && activeBranchDefinition && (
             <div className="branch-banner">
               <Radio size={14} />
               <span>
@@ -405,9 +413,13 @@ const Chat = () => {
             <textarea
               rows="1"
               placeholder={
-                activeBranchDefinition
-                  ? `${activeBranchDefinition.name} ile devam et... (Enter ile gönder)`
-                  : "Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
+                mode === CHAT_MODES.COMPARE
+                    ? (
+                        activeBranchDefinition
+                            ? `${activeBranchDefinition.name} ile devam et... (Enter ile gönder)`
+                            : "Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
+                    )
+                    : "Mesajını yaz... (Enter ile gönder)"
               }
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
@@ -484,6 +496,7 @@ const Chat = () => {
                             )}
                             <button
                               className="bubble-quote-btn"
+                              style={{ display: mode === CHAT_MODES.COMPARE ? undefined : "none" }}
                               title={`Bu cevabı Tartışma Modu'na taşı (başka bir AI'ya değerlendirt)`}
                               onClick={() => handleQuoteMessage(provider.backendProvider, provider.name, answer)}
                             >
