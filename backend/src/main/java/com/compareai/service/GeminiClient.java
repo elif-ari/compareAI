@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -43,10 +44,7 @@ public class GeminiClient implements AiClient {
                 .map(AiMessage::getContent)
                 .collect(Collectors.joining("\n"));
 
-        List<GeminiContent> contents = request.getMessages().stream()
-                .filter(m -> m.getRole() != Role.SYSTEM)
-                .map(this::toGeminiContent)
-                .collect(Collectors.toList());
+        List<GeminiContent> contents = sanitizeContents(request.getMessages());
 
         GeminiRequestBody body = new GeminiRequestBody(
                 contents,
@@ -83,6 +81,38 @@ public class GeminiClient implements AiClient {
                     .content("[Gemini HATA] Istek basarisiz: " + e.getMessage())
                     .build();
         }
+    }
+
+    private List<GeminiContent> sanitizeContents(List<AiMessage> rawMessages) {
+        List<GeminiContent> result = new ArrayList<>();
+        List<AiMessage> nonSystem = rawMessages.stream()
+                .filter(m -> m.getRole() != Role.SYSTEM && m.getContent() != null && !m.getContent().isBlank())
+                .collect(Collectors.toList());
+
+        if (nonSystem.isEmpty()) {
+            return List.of(new GeminiContent("user", List.of(new GeminiPart("Merhaba"))));
+        }
+
+        for (AiMessage msg : nonSystem) {
+            String role = msg.getRole() == Role.ASSISTANT ? "model" : "user";
+            String text = msg.getContent().trim();
+
+            if (result.isEmpty()) {
+                if (!"user".equals(role)) {
+                    result.add(new GeminiContent("user", List.of(new GeminiPart("Devam et."))));
+                }
+                result.add(new GeminiContent(role, List.of(new GeminiPart(text))));
+            } else {
+                GeminiContent last = result.get(result.size() - 1);
+                if (last.role().equals(role)) {
+                    String combined = last.parts().get(0).text() + "\n\n" + text;
+                    result.set(result.size() - 1, new GeminiContent(role, List.of(new GeminiPart(combined))));
+                } else {
+                    result.add(new GeminiContent(role, List.of(new GeminiPart(text))));
+                }
+            }
+        }
+        return result;
     }
 
     @Override

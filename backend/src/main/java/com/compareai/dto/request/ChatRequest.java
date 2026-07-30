@@ -47,4 +47,19 @@ public class ChatRequest {
 
     @NotBlank
     private String prompt;
+
+    // Otomatik Tartışma Modu (bkz. ChatService#runAutoDebate) için: sağlayıcıların kendi aralarında
+    // kaç tur konuşacağı (varsayılan 5, güvenlik için 2-6 arasına sınırlanır). Yalnızca
+    // POST /api/chat/debate endpoint'inde kullanılır, normal sendMessage'da dikkate alınmaz.
+    private Integer debateRounds;
+
+    // Cevap uzunluğu tercihi: "KISA" | "NORMAL" | "DETAYLI". Her mesajda ayrı ayrı gönderilebilir
+    // (Conversation'da KALICI olarak saklanmaz) - kullanıcı istediği turda kısa, istediği turda
+    // detaylı cevap isteyebilir. Boş/null veya tanınmayan değer -> NORMAL (ek talimat yok).
+    private String responseLength;
+
+    // SADECE Otomatik Tartışma Modu'nda (debate) kullanılır: true ise her sağlayıcıya sabit bir
+    // TARTIŞMA ROLÜ atanır (Pratik Uygulayıcı / Eleştirmen / Sentezleyici-Tur Rehberi) - bkz.
+    // ChatService#DEBATE_ROLE_HINTS. false/null ise roller atanmaz, herkes genel/nötr tartışır.
+    private Boolean useRoles;
 }

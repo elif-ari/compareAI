@@ -32,6 +32,15 @@ public class ChatController {
         return chatService.sendMessage(request);
     }
 
+    // OTOMATİK TARTIŞMA MODU: kullanıcı tek bir soru gönderir, seçili sağlayıcılar (varsayılan 5,
+    // request.debateRounds ile 2-6 arası ayarlanabilir tur boyunca) kullanıcı müdahalesi olmadan
+    // kendi aralarında tartışır, son turda bir moderatör nihai sentezi üretir. Dönen ConversationResponse
+    // konuşmanın TAM mesaj listesini içerir (bkz. ChatService#runAutoDebate).
+    @PostMapping("/debate")
+    public ConversationResponse runAutoDebate(@Valid @RequestBody ChatRequest request) {
+        return chatService.runAutoDebate(request);
+    }
+
     // Dashboard'daki "Sohbet Geçmişi" listesi: bir kullanıcıya ait tüm konuşmaları
     // (en yeniden en eskiye) özet halinde getirir.
     @GetMapping("/conversations")

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -42,10 +43,7 @@ public class ClaudeClient implements AiClient {
                 .map(AiMessage::getContent)
                 .collect(Collectors.joining("\n"));
 
-        List<ClaudeMessage> messages = request.getMessages().stream()
-                .filter(m -> m.getRole() != Role.SYSTEM)
-                .map(m -> new ClaudeMessage(m.getRole().getValue(), m.getContent()))
-                .collect(Collectors.toList());
+        List<ClaudeMessage> messages = sanitizeMessages(request.getMessages());
 
         ClaudeRequestBody body = new ClaudeRequestBody(
                 properties.getModel(),
@@ -84,6 +82,37 @@ public class ClaudeClient implements AiClient {
                     .content("[Claude HATA] Istek basarisiz: " + e.getMessage())
                     .build();
         }
+    }
+
+    private List<ClaudeMessage> sanitizeMessages(List<AiMessage> rawMessages) {
+        List<ClaudeMessage> result = new ArrayList<>();
+        List<AiMessage> nonSystem = rawMessages.stream()
+                .filter(m -> m.getRole() != Role.SYSTEM && m.getContent() != null && !m.getContent().isBlank())
+                .collect(Collectors.toList());
+
+        if (nonSystem.isEmpty()) {
+            return List.of(new ClaudeMessage("user", "Merhaba"));
+        }
+
+        for (AiMessage msg : nonSystem) {
+            String role = msg.getRole().getValue();
+            String content = msg.getContent().trim();
+
+            if (result.isEmpty()) {
+                if (!"user".equals(role)) {
+                    result.add(new ClaudeMessage("user", "Devam et."));
+                }
+                result.add(new ClaudeMessage(role, content));
+            } else {
+                ClaudeMessage last = result.get(result.size() - 1);
+                if (last.role().equals(role)) {
+                    result.set(result.size() - 1, new ClaudeMessage(role, last.content() + "\n\n" + content));
+                } else {
+                    result.add(new ClaudeMessage(role, content));
+                }
+            }
+        }
+        return result;
     }
 
     @Override
