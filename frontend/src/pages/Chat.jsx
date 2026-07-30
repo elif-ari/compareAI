@@ -9,6 +9,10 @@ import { fetchConversation } from "../services/chatApi";
 
 const API_BASE = "http://localhost:8080/api/chat";
 
+// Otomatik Tartışma Modu'nda sağlayıcıların kendi aralarında kaç tur konuşacağı (backend'de
+// ChatService#runAutoDebate içinde 2-6 arasına sınırlanıyor, güvenlik için burada da aynı varsayılan).
+const DEBATE_ROUNDS = 5;
+
 // Tartışma Modu'nda bir cevabı başka bir sağlayıcıya taşırken önerilen hazır komutlar.
 // {providerName} otomatik olarak referans alınan sağlayıcının adıyla değiştirilir.
 const DEBATE_QUICK_ACTIONS = [
@@ -25,9 +29,13 @@ const Chat = () => {
   const { providers: selectedIds, mode, setSelection } = useSelection();
 
   const providers = useMemo(() => selectedIds.map(getProviderById).filter(Boolean), [selectedIds]);
+  const canStartDebate = providers.length >= 2;
 
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  // "KISA" | "NORMAL" | "DETAYLI" - her mesajla birlikte backend'e gönderilir (bkz. ChatService#
+  // responseLengthHint). Kalıcı değildir, istediğin turda değiştirebilirsin.
+  const [responseLength, setResponseLength] = useState("NORMAL");
   // Kaydedilmiş bir sohbet URL'den açılıyorsa, mesajlar backend'den gelene kadar kartlarda
   // "Mesajınızı bekliyor..." yerine bir yükleniyor durumu gösterilir.
   const [isLoadingHistory, setIsLoadingHistory] = useState(!!conversationIdFromUrl);
@@ -63,14 +71,6 @@ const Chat = () => {
   // tıklandığında) bir kez çalışır: konuşmayı tüm mesajlarıyla getirir, kartların doğru
   // sağlayıcılarla/moda göre çizilmesi için SelectionContext'i o konuşmanın kendi
   // providers/mode bilgisiyle günceller ve HEAD'i (currentMessageId) ayarlar.
-
-  // Compare'dan Independent'a geçildiğinde Compare'a ait geçici state'i temizle.
-  useEffect(() => {
-    if (mode !== CHAT_MODES.COMPARE) {
-      setQuotedRef(null);
-    }
-  }, [mode]);
-
   const didLoadHistoryRef = useRef(false);
   useEffect(() => {
     if (!conversationIdFromUrl || didLoadHistoryRef.current) return;
@@ -171,7 +171,7 @@ const Chat = () => {
     if (!quotedRef) return text;
     if (targetBackendProvider && quotedRef.provider === targetBackendProvider) return text; // kendi cevabını kendine alıntılamaya gerek yok
     return (
-      `[Tartışma Modu - ${quotedRef.providerName}'in cevabını değerlendiriyorsun]\n` +
+      `[Tartışma Modu - QUOTED_PROVIDER:${quotedRef.provider} - ${quotedRef.providerName}'in cevabını değerlendiriyorsun]\n` +
       `${quotedRef.providerName} şu cevabı verdi:\n"""\n${quotedRef.content}\n"""\n\n` +
       `Bu cevap hakkında kullanıcının isteği: ${text}\n\n` +
       `Yalnızca yukarıdaki alıntılanan cevabı analiz ederek kendi değerlendirmeni (eleştiri, katıldığın/katılmadığın noktalar, karşı argüman veya destekleyici açıklama) yaz.`
@@ -189,6 +189,7 @@ const Chat = () => {
       const payload = {
         prompt: wrapWithQuoteIfNeeded(messageToSend, activeBranchProvider),
         askAllProviders: activeBranchProvider === null,
+        responseLength,
       };
       if (conversationId) {
         payload.conversationId = conversationId;
@@ -247,6 +248,7 @@ const Chat = () => {
         prompt: finalPrompt,
         conversationId,
         targetProvider: backendProvider,
+        responseLength,
       };
       const response = await axios.post(API_BASE, payload);
       const { currentMessageId, userMessage, aiResponses } = response.data;
@@ -327,6 +329,51 @@ const Chat = () => {
     }
   };
 
+  // OTOMATİK TARTIŞMA MODU: kullanıcı TEK bir soru yazar, "Tartışma Başlat" butonuna basar; backend
+  // (bkz. ChatService#runAutoDebate) seçili sağlayıcıları kullanıcı müdahalesi olmadan DEBATE_ROUNDS
+  // tur boyunca birbirleriyle konuşturur ve son turda bir moderatör nihai sentezi üretir. Dönen
+  // ConversationResponse konuşmanın TAM mesaj listesini içerdiği için - tıpkı geçmiş sohbet
+  // yüklemede olduğu gibi - mesajları doğrudan state'e yazıyoruz; her kart, tüm turları (ve nihai
+  // sentezi) kendi SMS-benzeri geçmişinde otomatik olarak gösterir, ekstra bir render mantığı gerekmez.
+  const handleStartDebate = async () => {
+    if (!inputText.trim() || isLoading) return;
+    if (!canStartDebate) {
+      alert("Otomatik tartışma başlatmak için en az 2 model seçmelisin.");
+      return;
+    }
+    const promptToSend = inputText;
+    setInputText("");
+    setIsLoading(true);
+
+    try {
+      const payload = {
+        prompt: promptToSend,
+        debateRounds: DEBATE_ROUNDS,
+        responseLength,
+      };
+      if (conversationId) {
+        payload.conversationId = conversationId;
+      } else {
+        payload.providers = selectedIds.map((id) => getProviderById(id)?.backendProvider).filter(Boolean);
+        payload.mode = mode;
+        payload.userId = user?.id;
+      }
+
+      const response = await axios.post(`${API_BASE}/debate`, payload);
+      setConversationId(response.data.id);
+      setMessages(response.data.messages || []);
+      setHeadId(response.data.currentMessageId);
+      setQuotedRef(null);
+      setActiveBranchProvider(null);
+      setBranchAnchorId(null);
+    } catch (error) {
+      console.error("Otomatik tartışma başlatılamadı:", error);
+      alert("Otomatik tartışma başlatılamadı. Konsolu kontrol et.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -383,7 +430,7 @@ const Chat = () => {
               </span>
             </div>
           )}
-          {mode === CHAT_MODES.COMPARE && quotedRef && (
+          {quotedRef && (
             <div className="branch-banner quote-banner">
               <Quote size={14} />
               <span>
@@ -397,7 +444,7 @@ const Chat = () => {
               </button>
             </div>
           )}
-          {mode === CHAT_MODES.COMPARE && activeBranchDefinition && (
+          {activeBranchDefinition && (
             <div className="branch-banner">
               <Radio size={14} />
               <span>
@@ -409,26 +456,58 @@ const Chat = () => {
               </button>
             </div>
           )}
+          <div className="input-toolbar-row">
+            <div className="response-length-picker">
+              <span className="response-length-label">Yanıt uzunluğu:</span>
+              {[
+                { value: "KISA", label: "Kısa" },
+                { value: "NORMAL", label: "Normal" },
+                { value: "DETAYLI", label: "Detaylı" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`response-length-chip ${responseLength === opt.value ? "active" : ""}`}
+                  onClick={() => setResponseLength(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="input-box">
-            <textarea
-              rows="1"
-              placeholder={
-                mode === CHAT_MODES.COMPARE
-                    ? (
-                        activeBranchDefinition
-                            ? `${activeBranchDefinition.name} ile devam et... (Enter ile gönder)`
-                            : "Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
-                    )
-                    : "Mesajını yaz... (Enter ile gönder)"
-              }
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isLoading || isLoadingHistory}
-            />
-            <button className="send-btn" onClick={handleSendMessage} disabled={isLoading || isLoadingHistory}>
-              {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-            </button>
+            <div className="input-box-textarea-wrap">
+              <textarea
+                rows="1"
+                placeholder={
+                  activeBranchDefinition
+                    ? `${activeBranchDefinition.name} ile devam et... (Enter ile gönder)`
+                    : "Tüm yapay zekalara aynı anda sor... (Enter ile gönder)"
+                }
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading || isLoadingHistory}
+              />
+              <button className="send-btn" onClick={handleSendMessage} disabled={isLoading || isLoadingHistory}>
+                {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+              </button>
+            </div>
+            {mode === CHAT_MODES.COMPARE && (
+              <button
+                className="debate-start-btn"
+                onClick={handleStartDebate}
+                disabled={isLoading || isLoadingHistory || !inputText.trim() || !canStartDebate}
+                title={
+                  canStartDebate
+                    ? `Bu soruyu sor, sonra ${providers.length} model kendi aralarında ${DEBATE_ROUNDS} tur otomatik tartışsın, sana nihai sonucu getirsinler`
+                    : "Otomatik tartışma başlatmak için en az 2 model seçmelisin"
+                }
+              >
+                {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Swords size={16} />}
+                Tartışma Başlat ({DEBATE_ROUNDS} tur)
+              </button>
+            )}
           </div>
         </div>
 
@@ -496,7 +575,6 @@ const Chat = () => {
                             )}
                             <button
                               className="bubble-quote-btn"
-                              style={{ display: mode === CHAT_MODES.COMPARE ? undefined : "none" }}
                               title={`Bu cevabı Tartışma Modu'na taşı (başka bir AI'ya değerlendirt)`}
                               onClick={() => handleQuoteMessage(provider.backendProvider, provider.name, answer)}
                             >

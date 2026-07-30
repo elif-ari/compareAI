@@ -71,12 +71,7 @@ public class ChatService {
     public ChatResponse sendMessage(ChatRequest request) {
 
         Conversation conversation = resolveConversation(request);
-
         Message parentMessage = resolveParentMessage(request, conversation);
-        boolean firstMessage =
-                conversation.getTitle() == null
-                        || conversation.getTitle().isBlank()
-                        || "Yeni Sohbet".equals(conversation.getTitle());
 
         // 1) Kullanıcı mesajını kaydet
         Message userMessage = new Message();
@@ -106,37 +101,20 @@ public class ChatService {
         Boolean effectiveAskAllProviders = isCompareMode
                 ? (hasExplicitCardTarget ? Boolean.FALSE : Boolean.TRUE)
                 : request.getAskAllProviders();
-        List<AiClient> targetClients = resolveTargetClients(
-                conversation, parentMessage, effectiveAskAllProviders, request.getTargetProvider());
+        List<AiClient> targetClients = resolveTargetClients(parentMessage, effectiveAskAllProviders, request.getTargetProvider());
 
         // 3) Seçilen sağlayıcılara AYNI ANDA (paralel) istek at.
         //    ÖNEMLİ: context artık her sağlayıcı için AYRI hesaplanıyor (buildContext'e bkz.) çünkü
         //    Independent modda her sağlayıcı sadece kendi geçmişini görmeli; Compare modda ise
         //    context her sağlayıcı için aynı (ortak/birleşik geçmiş) olur.
-        final Message finalUserMessage = userMessage;
-        final Conversation finalConversation = conversation;
-        List<CompletableFuture<MessageResponse>> futures = targetClients.stream()
-                .map(client -> CompletableFuture.supplyAsync(() -> {
-                    List<AiMessage> context = buildContext(finalConversation, finalUserMessage, client.getProvider());
-                    AiRequest aiRequest = AiRequest.builder().messages(context).build();
-                    return callProviderAndSave(client, aiRequest, finalConversation, finalUserMessage);
-                }, taskExecutor))
-                .collect(Collectors.toList());
+        List<MessageResponse> aiResponses = runBroadcastTurn(conversation, userMessage, targetClients,
+                request.getResponseLength(), null);
 
-        List<MessageResponse> aiResponses = futures.stream()
-                .map(CompletableFuture::join)
-                .collect(Collectors.toList());
-        if (firstMessage) {
-            try {
-                String title = generateConversationTitle(request.getPrompt());
-
-                if (!title.isBlank()) {
-                    conversation.setTitle(title);
-                    conversationRepository.save(conversation);
-                }
-            } catch (Exception ignored) {
-            }
-        }
+        // Konuşmanın gerçekten İLK mesajıysa (kök mesaj, parentMessage == null), ham prompt'u
+        // (generateTitle ile 60 karakterde kesilmiş hali) yerine bir AI'ya kısa/profesyonel,
+        // anahtar-kelime tarzı bir başlık ürettiriyoruz - bkz. maybeGenerateSmartTitle.
+        // Sonraki turlarda başlığa DOKUNULMAZ.
+        maybeGenerateSmartTitle(conversation, parentMessage, request.getPrompt(), targetClients);
 
         return ChatResponse.builder()
                 .conversationId(conversation.getId())
@@ -144,6 +122,55 @@ public class ChatService {
                 .userMessage(toMessageResponse(userMessage))
                 .aiResponses(aiResponses)
                 .build();
+    }
+
+    private static final String TITLE_SYSTEM_HINT =
+            "Kullanıcının aşağıdaki mesajına, bir sohbet geçmişi listesinde gösterilecek KISA ve " +
+            "PROFESYONEL bir başlık üret. Kurallar: 2-5 kelime; Türkçe; konuyu özetleyen anahtar " +
+            "kelimelerle, isim tamlaması gibi (örn. 'Sağlıklı Yaşam Uygulama İsimleri', 'React vs Angular " +
+            "Karşılaştırması', 'Mercimek Çorbası Tarifi'); başında/sonunda tırnak işareti KULLANMA; sonuna " +
+            "nokta KOYMA; SADECE başlığı yaz, başka hiçbir açıklama, selamlama veya ek cümle ekleme.";
+
+    // Konuşmanın kök mesajı gönderildikten sonra çağrılır: ham prompt yerine kısa/anahtar-kelime tarzı
+    // bir başlık üretmeyi DENER. Bu bir "best effort" adımdır - herhangi bir sebeple başarısız olursa
+    // (API hatası, boş cevap, vb.) sessizce eski (resolveConversation'da generateTitle ile atanmış ham
+    // prompt) başlığı korur; ana sohbet akışını ASLA bozmaz veya kullanıcıya hata döndürmez.
+    private void maybeGenerateSmartTitle(Conversation conversation, Message parentMessage, String userPrompt,
+                                          List<AiClient> targetClients) {
+        if (parentMessage != null || targetClients.isEmpty() || userPrompt == null || userPrompt.isBlank()) {
+            return;
+        }
+        try {
+            AiClient titleClient = targetClients.get(0);
+            List<AiMessage> titlePromptMessages = List.of(
+                    AiMessage.builder().role(Role.SYSTEM).content(TITLE_SYSTEM_HINT).build(),
+                    AiMessage.builder().role(Role.USER).content(userPrompt).build()
+            );
+            AiClientResponse response = titleClient.sendPrompt(
+                    AiRequest.builder().messages(titlePromptMessages).build());
+
+            String smartTitle = sanitizeGeneratedTitle(response.getContent());
+            if (smartTitle != null && !smartTitle.isBlank()) {
+                conversation.setTitle(smartTitle);
+                conversationRepository.save(conversation);
+            }
+        } catch (Exception e) {
+            // Kasıtlı olarak yutuluyor: başlık kozmetik bir alandır, üretimi başarısız olsa da
+            // kullanıcının asıl mesajına verilen cevaplar zaten döndü/kaydedildi.
+        }
+    }
+
+    // Modelin ürettiği başlığı temizler: baştaki/sondaki tırnak-benzeri karakterleri, sondaki noktayı
+    // kaldırır ve listede taşmaması için makul bir uzunlukta keser.
+    private String sanitizeGeneratedTitle(String rawTitle) {
+        if (rawTitle == null) return null;
+        String cleaned = rawTitle.trim()
+                .replaceAll("^[\"'“”«»`]+", "")
+                .replaceAll("[\"'“”«»`]+$", "")
+                .replaceAll("\\.+$", "")
+                .trim();
+        if (cleaned.isBlank()) return null;
+        return cleaned.length() > 70 ? cleaned.substring(0, 70).trim() + "…" : cleaned;
     }
 
     /**
@@ -156,8 +183,7 @@ public class ChatService {
      *                         null  -> eski davranışa düş: parent ASSISTANT ise tek sağlayıcı, değilse 3'ü de
      * @param targetProviderStr askAllProviders=false olduğunda hangi sağlayıcının cevap vereceği (bkz. ChatRequest#targetProvider)
      */
-    private List<AiClient> resolveTargetClients(Conversation conversation, Message parentMessage,
-                                                Boolean askAllProviders, String targetProviderStr) {
+    private List<AiClient> resolveTargetClients(Message parentMessage, Boolean askAllProviders, String targetProviderStr) {
         boolean wantsSingleProvider;
 
         if (askAllProviders != null) {
@@ -175,32 +201,7 @@ public class ChatService {
             return List.of(singleClient);
         }
 
-        return resolveConfiguredClients(conversation);
-    }
-
-    private List<AiClient> resolveConfiguredClients(Conversation conversation) {
-        if (conversation.getProviders() == null || conversation.getProviders().isBlank()) {
-            return new ArrayList<>(clientMap.values());
-        }
-
-        List<AiClient> configuredClients = new ArrayList<>();
-        for (String providerName : conversation.getProviders().split(",")) {
-            try {
-                AiProvider provider = AiProvider.valueOf(providerName.trim().toUpperCase());
-                AiClient client = clientMap.get(provider);
-                if (client != null) {
-                    configuredClients.add(client);
-                }
-            } catch (IllegalArgumentException ignored) {
-                // Ignore unknown providers saved by an old or invalid conversation.
-            }
-        }
-
-        if (configuredClients.isEmpty()) {
-            throw new InvalidBranchOperationException(
-                    "No usable AI provider is configured for this conversation.");
-        }
-        return configuredClients;
+        return new ArrayList<>(clientMap.values());
     }
 
     /**
@@ -226,6 +227,150 @@ public class ChatService {
         return parentMessage.getAiProvider();
     }
 
+    // Verilen client listesine, verilen leaf (kullanıcı/tetikleyici) mesajına göre AYNI ANDA (paralel)
+    // istek atar ve her cevabı kaydeder. Hem normal sendMessage akışında HEM DE Otomatik Tartışma
+    // Modu'ndaki her turda (bkz. runAutoDebate) kullanılan ORTAK bir yardımcıdır.
+    //
+    // @param responseLength  "KISA"/"NORMAL"/"DETAYLI" (null/boş -> ek talimat yok)
+    // @param personaHints    sağlayıcı -> tartışma rolü talimatı eşlemesi (null -> kimseye rol atanmaz,
+    //                        normal sendMessage akışında her zaman null gönderilir; yalnızca
+    //                        Otomatik Tartışma Modu'nda useRoles=true ise doldurulur)
+    private List<MessageResponse> runBroadcastTurn(Conversation conversation, Message leafMessage,
+                                                    List<AiClient> clients, String responseLength,
+                                                    Map<AiProvider, String> personaHints) {
+        List<CompletableFuture<MessageResponse>> futures = clients.stream()
+                .map(client -> CompletableFuture.supplyAsync(() -> {
+                    String personaHint = personaHints != null ? personaHints.get(client.getProvider()) : null;
+                    List<AiMessage> context = buildContext(conversation, leafMessage, client.getProvider(),
+                            responseLength, personaHint);
+                    AiRequest aiRequest = AiRequest.builder().messages(context).build();
+                    return callProviderAndSave(client, aiRequest, conversation, leafMessage);
+                }, taskExecutor))
+                .collect(Collectors.toList());
+
+        return futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
+    }
+
+    // Sistem tarafından otomatik üretilen bir "tur tetikleyici" USER mesajı kaydeder (ör. "Tur 2/5").
+    // Normal kullanıcı mesajlarıyla AYNI tabloda tutulur ki mevcut frontend (her kartın kendi SMS'imsi
+    // geçmişi, ChatResponse/ConversationResponse şeması) HİÇBİR ek değişiklik gerektirmeden bunları da
+    // sıradan bir soru-cevap turu gibi gösterebilsin.
+    private Message saveSystemTriggerMessage(Conversation conversation, Message parentMessage, String content) {
+        Message message = new Message();
+        message.setConversation(conversation);
+        message.setParentMessage(parentMessage);
+        message.setRole(Role.USER);
+        message.setContent(content);
+        message = messageRepository.save(message);
+        conversation.setCurrentMessageId(message.getId());
+        conversationRepository.save(conversation);
+        return message;
+    }
+
+    // Bir konuşmanın seçili sağlayıcılarına (Conversation.providers CSV alanı) karşılık gelen
+    // AiClient'ları döner. Boş/eksikse (eski konuşmalar vb.) TÜM kayıtlı client'lara düşer.
+    private List<AiClient> resolveDebateClients(Conversation conversation) {
+        List<String> providerNames = splitProviders(conversation.getProviders());
+        if (providerNames.isEmpty()) {
+            return new ArrayList<>(clientMap.values());
+        }
+        return providerNames.stream()
+                .map(name -> {
+                    try {
+                        return clientMap.get(AiProvider.valueOf(name.trim().toUpperCase()));
+                    } catch (IllegalArgumentException e) {
+                        return null;
+                    }
+                })
+                .filter(c -> c != null)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * OTOMATİK TARTIŞMA MODU: Kullanıcı TEK bir soru sorar; bundan sonra seçili sağlayıcılar
+     * (varsayılan 5 tur, çağıran istekte debateRounds ile 2-6 arası sınırlanabilir) KENDİ ARALARINDA,
+     * kullanıcı müdahale etmeden otomatik olarak tartışır ve son turda bir "moderatör" model
+     * tartışmanın nihai sentezini üretir.
+     *
+     * Akış:
+     *  1. Tur 1: orijinal soru -> tüm sağlayıcılara birden (normal COMPARE turu gibi).
+     *  2. Tur 2..N: her tur için sentetik bir "tetikleyici" USER mesajı eklenir ("diğerlerinin bir
+     *     önceki turdaki cevaplarını değerlendir, savun/eleştir/geliştir"); buildCompareContext zaten
+     *     TÜM geçmişi otomatik topladığı ve artık her sağlayıcının KENDİ eski cevabını
+     *     "(SENİN ÖNCEKİ CEVABIN)" diye işaretlediği için (bkz. buildCompareContext), modeller
+     *     otomatik olarak SADECE diğer ikisinin bir önceki (ve daha öncekilerin) cevaplarını
+     *     eleştirir/savunur - ayrı bir "peer context" mantığı yazmaya gerek kalmadı.
+     *  3. Son adım: bir moderatör (seçili sağlayıcıların ilki) tüm tartışmayı okuyup kullanıcının
+     *     orijinal sorusuna TEK ve nihai bir cevap/sentez üretir.
+     *
+     * Dönen ConversationResponse, konuşmanın TAM mesaj listesini içerir - frontend mevcut
+     * fetchConversation/setMessages mekanizmasını AYNEN kullanarak tüm turları (ve nihai sentezi)
+     * her kartın kendi SMS-benzeri geçmişinde gösterebilir, ek bir DTO/parse mantığı gerekmez.
+     */
+    public ConversationResponse runAutoDebate(ChatRequest request) {
+        int requestedRounds = request.getDebateRounds() != null ? request.getDebateRounds() : 5;
+        int rounds = Math.max(2, Math.min(requestedRounds, 6)); // güvenlik: maliyet/gecikme kontrolü için 2-6 arası
+
+        Conversation conversation = resolveConversation(request);
+        // Otomatik Tartışma Modu, sağlayıcıların birbirini görmesini GEREKTİRİR - bu yalnızca
+        // COMPARE modunun ortak/birleşik context mantığıyla (buildCompareContext) anlamlıdır.
+        conversation.setMode("COMPARE");
+        conversationRepository.save(conversation);
+
+        Message parentMessage = resolveParentMessage(request, conversation);
+
+        List<AiClient> debateClients = resolveDebateClients(conversation);
+        if (debateClients.size() < 2) {
+            throw new InvalidBranchOperationException(
+                    "Otomatik Tartışma Modu en az 2 sağlayıcı seçilmesini gerektirir.");
+        }
+
+        // useRoles=true ise her sağlayıcıya SABİT bir tartışma rolü atanır (bkz. DEBATE_ROLE_HINTS) ve
+        // bu rol TÜM turlar boyunca AYNI kalır (tutarlılık için - aksi halde model turdan tura "kimliğini"
+        // değiştirmiş gibi görünürdü). useRoles=false/null ise personaHints null kalır, kimseye rol atanmaz.
+        Map<AiProvider, String> personaHints = null;
+        if (Boolean.TRUE.equals(request.getUseRoles())) {
+            personaHints = new EnumMap<>(AiProvider.class);
+            for (int i = 0; i < debateClients.size(); i++) {
+                personaHints.put(debateClients.get(i).getProvider(), DEBATE_ROLE_HINTS[i % DEBATE_ROLE_HINTS.length]);
+            }
+        }
+        final Map<AiProvider, String> finalPersonaHints = personaHints;
+
+        // TUR 1: kullanıcının orijinal sorusu.
+        Message currentLeaf = saveSystemTriggerMessage(conversation, parentMessage, request.getPrompt());
+        maybeGenerateSmartTitle(conversation, parentMessage, request.getPrompt(), debateClients);
+        runBroadcastTurn(conversation, currentLeaf, debateClients, request.getResponseLength(), finalPersonaHints);
+
+        // TUR 2..N: sırayla, otomatik tetikleyici mesajlarla devam eder.
+        for (int round = 2; round <= rounds; round++) {
+            String trigger = "🔁 Otomatik Tartışma - Tur " + round + "/" + rounds + ": Bir önceki turda " +
+                    "diğer modellerin verdiği cevapları dikkate alarak kendi pozisyonunu SAVUN, GELİŞTİR ya " +
+                    "da gerekiyorsa DEĞİŞTİR. Katılmadığın noktaları açıkça belirt, gerekirse yeni bir " +
+                    "sentez/uzlaşı öner.";
+            currentLeaf = saveSystemTriggerMessage(conversation, currentLeaf, trigger);
+            runBroadcastTurn(conversation, currentLeaf, debateClients, request.getResponseLength(), finalPersonaHints);
+        }
+
+        // NİHAİ SENTEZ: moderatör (seçili sağlayıcıların ilki) tüm tartışmayı özetleyip TEK bir
+        // nihai cevap üretir. runBroadcastTurn yerine tekli çağrı kullanıyoruz çünkü burada birden
+        // fazla değil, TEK bir moderatör cevabı istiyoruz. Moderatöre KASITLI OLARAK persona rolü
+        // verilmiyor (rolü ne olursa olsun burada tarafsız bir sentez yapması isteniyor).
+        String synthesisTrigger = "🏁 Nihai Sentez: Yukarıdaki " + rounds + " turluk tartışmayı özetle. " +
+                "Modellerin hangi noktalarda hemfikir olduğunu, hangi noktalarda ayrıştığını kısaca belirt, " +
+                "sonra kullanıcının ORİJİNAL sorusuna kendi nihai/dengeli önerini net biçimde ver.";
+        Message synthesisLeaf = saveSystemTriggerMessage(conversation, currentLeaf, synthesisTrigger);
+
+        AiClient moderator = debateClients.get(0);
+        List<AiMessage> synthesisContext = buildContext(conversation, synthesisLeaf, moderator.getProvider(),
+                request.getResponseLength(), null);
+        callProviderAndSave(moderator,
+                AiRequest.builder().messages(synthesisContext).build(),
+                conversation, synthesisLeaf);
+
+        return toConversationResponse(conversation);
+    }
+
     private MessageResponse callProviderAndSave(AiClient client, AiRequest aiRequest,
                                                 Conversation conversation, Message parentMessage) {
         AiClientResponse clientResponse = client.sendPrompt(aiRequest);
@@ -239,50 +384,6 @@ public class ChatService {
 
         Message saved = messageRepository.save(aiMessage);
         return toMessageResponse(saved);
-    }
-    private String generateConversationTitle(String firstPrompt) {
-
-        AiClient openAi = clientMap.get(AiProvider.OPENAI);
-
-        if (openAi == null) {
-            return firstPrompt.length() > 60
-                    ? firstPrompt.substring(0, 60)
-                    : firstPrompt;
-        }
-
-        AiRequest request = AiRequest.builder()
-                .messages(List.of(
-                        AiMessage.builder()
-                                .role(Role.SYSTEM)
-                                .content("""
-                                    You generate titles for chat conversations.
-
-                                    Rules:
-                                    - Maximum 5 words.
-                                    - Use concise keywords.
-                                    - Language must match the user's language.
-                                    - Do not use quotation marks.
-                                    - Do not end with punctuation.
-                                    - Return ONLY the title.
-                                    """)
-                                .build(),
-
-                        AiMessage.builder()
-                                .role(Role.USER)
-                                .content(firstPrompt)
-                                .build()
-                ))
-                .build();
-
-        try {
-            return openAi.sendPrompt(request)
-                    .getContent()
-                    .trim();
-        } catch (Exception e) {
-            return firstPrompt.length() > 60
-                    ? firstPrompt.substring(0, 60)
-                    : firstPrompt;
-        }
     }
 
     /**
@@ -395,7 +496,7 @@ public class ChatService {
             return getConversationOrThrow(request.getConversationId());
         }
         Conversation conversation = new Conversation();
-        conversation.setTitle("Yeni Sohbet");
+        conversation.setTitle(generateTitle(request.getPrompt()));
         conversation.setUserId(request.getUserId());
         if (request.getProviders() != null && !request.getProviders().isEmpty()) {
             conversation.setProviders(String.join(",", request.getProviders()));
@@ -458,39 +559,44 @@ public class ChatService {
             "Bu bir çoklu-yapay-zeka karşılaştırma sohbeti: kullanıcı her turda ChatGPT, Claude ve Gemini'nin " +
             "cevaplarını yan yana görüyor ve içlerinden birini o turun tercih ettiği cevap olarak " +
             "işaretleyebiliyor. Kullanıcının bir sonraki mesajından önce sana, önceki turların özetini " +
-            "(hangi sağlayıcının ne cevap verdiğini ve kullanıcının hangisini tercih ettiğini) referans amaçlı " +
-            "bilgi olarak vereceğim - bu özet SENİN daha önce söylediğin bir şey DEĞİLDİR, başka yapay zekaların " +
-            "cevaplarıdır, sadece bağlam içindir.\n\n" +
-            "TARTIŞMACI TUTUM: Diğer sağlayıcıların cevaplarını pasifçe kabul etme; onları eleştirel bir gözle " +
-            "değerlendir. Eğer bir sağlayıcının cevabında eksik, yanlış, yanıltıcı veya zayıf bir gerekçe " +
-            "görüyorsan bunu AÇIKÇA belirt ve neden katılmadığını kısaca gerekçelendir. Katıldığın bir noktayı da " +
-            "söyleyebilirsin ama sadece onaylamakla yetinme - kendi bağımsız değerlendirmeni yap, gerekirse farklı " +
-            "bir sonuca var. Kullanıcı seni açıkça başka bir sağlayıcının cevabıyla karşılaştırıyorsa (örn. " +
-            "\"Gemini şunu söyledi, sen ne düşünüyorsun\"), o cevaba doğrudan ve dürüstçe tepki ver: sadece nazikçe " +
-            "\"farklı bakış açıları olabilir\" deyip geçme, gerçekten doğru bulmadığın yeri söyle. Amaç kibarca " +
-            "hemfikir olmak değil, kullanıcıya en doğru/en iyi cevabı bulmakta yardımcı olacak gerçek bir tartışma " +
-            "ortamı sunmak. Yine de saygılı bir üslup kullan, diğer sağlayıcıyı aşağılama, sadece içeriği eleştir.\n\n" +
+            "referans amaçlı bilgi olarak vereceğim. Bu özette her cevabın kime ait olduğu AÇIKÇA " +
+            "işaretlenecek: \"(SENİN ÖNCEKİ CEVABIN)\" diye işaretlenenler SENİN daha önce söylediğin " +
+            "şeylerdir, diğerleri (\"ChatGPT:\", \"Claude:\", \"Gemini:\" - senin adın DIŞINDAKİ etiketlerle) " +
+            "BAŞKA yapay zekaların cevaplarıdır.\n\n" +
+            "TARTIŞMACI TUTUM: DİĞER sağlayıcıların cevaplarını pasifçe kabul etme; onları eleştirel bir " +
+            "gözle değerlendir. Eğer bir sağlayıcının cevabında eksik, yanlış, yanıltıcı veya zayıf bir " +
+            "gerekçe görüyorsan bunu AÇIKÇA belirt ve neden katılmadığını kısaca gerekçelendir. ÖNEMLİ: " +
+            "\"(SENİN ÖNCEKİ CEVABIN)\" diye işaretlenmiş cevabı ELEŞTİRMEN İSTENMİYOR - o zaten senin kendi " +
+            "görüşün, kendi kendinle tartışma; onu sadece devam ettir, gerekirse yeni bilgi ışığında " +
+            "GELİŞTİR/güncelle, ama sanki başka biriymiş gibi eleştirme. Katıldığın bir noktayı da " +
+            "söyleyebilirsin ama sadece onaylamakla yetinme - kendi bağımsız değerlendirmeni yap, gerekirse " +
+            "farklı bir sonuca var. Kullanıcı seni açıkça başka bir sağlayıcının cevabıyla karşılaştırıyorsa " +
+            "(örn. \"Gemini şunu söyledi, sen ne düşünüyorsun\"), o cevaba doğrudan ve dürüstçe tepki ver: " +
+            "sadece nazikçe \"farklı bakış açıları olabilir\" deyip geçme, gerçekten doğru bulmadığın yeri " +
+            "söyle. Amaç kibarca hemfikir olmak değil, kullanıcıya en doğru/en iyi cevabı bulmakta yardımcı " +
+            "olacak gerçek bir tartışma ortamı sunmak. Yine de saygılı bir üslup kullan, diğer sağlayıcıyı " +
+            "aşağılama, sadece içeriği eleştir.\n\n" +
             "ÇOK ÖNEMLİ: cevabında ASLA \"[ChatGPT]\", \"[Claude]\", \"[Gemini]\" gibi etiketler kullanma, başka bir " +
             "sağlayıcı adına konuşma ya da referans özetini tekrar etme/kopyalama; kendi görüşünü, kendi doğal " +
             "sesinle, tek bir cevap olarak yaz (diğer sağlayıcıdan bahsederken \"Gemini\", \"ChatGPT\" gibi ismini " +
             "kullanabilirsin, bu yasak değil - yasak olan onun adına konuşmak/onun cevabını taklit etmek).";
 
-    private static final String DEVELOPER_SYSTEM_HINT = """
-            Act as a senior software engineer and practical technical mentor.
-            Reply in the user's language with a concise, clear, easy-to-scan answer. Lead with the direct answer,
-            then add only the most important details. For software questions, provide focused code or commands only
-            when useful, and keep examples minimal. Mention assumptions, edge cases, validation, security, or error
-            handling only when they materially affect the solution. Prefer maintainable, production-aware solutions
-            over vague high-level advice. Do not invent APIs, files, or results;
-            clearly label uncertainty and ask a concise follow-up only when required information is missing.
-            For non-technical questions, remain helpful and concise without forcing code into the response.
-            """;
+    // Varsayılan olarak TÜM isteklere eklenen sistem talimatı: modelin bir yazılım geliştirici/
+    // mühendis gibi teknik, kesin ve pratik cevaplar vermesini ister. Kullanıcı toggle ile
+    // açıp kapatmıyor - her zaman aktif (bkz. buildContext extras). Soru programlama/kod ile
+    // ilgili DEĞİLSE modelin normal genel bilgisiyle cevap vermesine izin verir, yani kod dışı
+    // konularda zorla teknik jargon üretmeye ZORLAMAZ.
+    private static final String DEFAULT_DEVELOPER_SYSTEM_HINT =
+            "Sen deneyimli bir yazılım geliştirici/mühendis gibi düşünen bir asistansın. Kullanıcının " +
+            "sorusu kod, programlama, mimari, hata ayıklama veya teknik bir konuyla ilgiliyse: net, " +
+            "doğru ve uygulanabilir cevaplar ver; gerektiğinde çalışır durumda kod örnekleri, komutlar " +
+            "veya adım adım talimatlar kullan; varsayımlarını belirt, iyi pratiklere ve okunabilirliğe " +
+            "dikkat et, gereksiz laf kalabalığından kaçın. Kullanıcının sorusu programlama/teknik bir " +
+            "konu DEĞİLSE bu talimatı görmezden gel ve konuya uygun şekilde normal, doğal bir cevap ver - " +
+            "kod dışı konularda ZORLA teknik jargon veya yazılımcı üslubu kullanma.";
 
-    private static final int MAX_COMPARE_CONTEXT_TURNS = 6;
-    private static final int MAX_INDEPENDENT_CONTEXT_TURNS = 12;
-    private static final int MAX_CONTEXT_ANSWER_CHARS = 4_000;
-
-    private List<AiMessage> buildContext(Conversation conversation, Message leaf, AiProvider targetProvider) {
+    private List<AiMessage> buildContext(Conversation conversation, Message leaf, AiProvider targetProvider,
+                                          String responseLength, String personaHint) {
         List<Message> allMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());
 
         // leaf (az önce kaydedilen kullanıcı mesajı) listede olsun/olmasın, geçmişi ondan
@@ -505,64 +611,106 @@ public class ChatService {
                 .filter(m -> m.getRole() == Role.ASSISTANT && m.getParentMessage() != null)
                 .collect(Collectors.groupingBy(m -> m.getParentMessage().getId()));
 
-        return compareMode
+        List<AiMessage> context = compareMode
                 ? buildCompareContext(history, answersByParent, leaf, targetProvider)
                 : buildIndependentContext(history, answersByParent, leaf, targetProvider);
+
+        // Cevap uzunluğu, varsayılan "yazılımcı gibi düşün" talimatı ve (varsa) tartışma rolü,
+        // EK sistem mesajları olarak başa eklenir.
+        // NOT: Anthropic/Gemini client'ları TÜM system-rollü mesajları zaten tek bir alanda
+        // birleştiriyor (bkz. ClaudeClient/GeminiClient), OpenAI da birden fazla system mesajını
+        // sorunsuz kabul ediyor - o yüzden sırası veya sayısı önemli değil, ekstra client
+        // değişikliği gerekmedi.
+        List<AiMessage> extras = new ArrayList<>();
+        extras.add(AiMessage.builder().role(Role.SYSTEM).content(DEFAULT_DEVELOPER_SYSTEM_HINT).build());
+        if (personaHint != null && !personaHint.isBlank()) {
+            extras.add(AiMessage.builder().role(Role.SYSTEM).content(personaHint).build());
+        }
+        String lengthHint = responseLengthHint(responseLength);
+        if (lengthHint != null) {
+            // Kasıtlı olarak SIRALAMADA EN SONA (kullanıcı mesajına en yakın) ekleniyor: modeller
+            // system talimatına genelde en son okudukları/en yakın olan kısıtlamaya daha çok uyuyor.
+            extras.add(AiMessage.builder().role(Role.SYSTEM).content(lengthHint).build());
+        }
+        List<AiMessage> combined = new ArrayList<>(extras);
+        combined.addAll(context);
+        return combined;
     }
 
-    private String providerIdentityHint(AiProvider targetProvider) {
-        String providerName = providerLabel(targetProvider);
-        return "You are " + providerName + ". In the comparison reference, any answer labeled \""
-                + providerName + "\" is your own earlier answer, not another model's answer. Never critique,"
-                + " grade, or debate your own earlier answer. Only evaluate answers from other providers. If the"
-                + " user asks about your own earlier answer, answer the new request directly without framing it"
-                + " as a self-critique.";
+    // Kullanıcının seçtiği "Yanıt Uzunluğu" tercihine göre ek bir sistem talimatı üretir.
+    // NORMAL veya tanınmayan/boş bir değer için null döner (ek talimat eklenmez, mevcut davranış).
+    // NOT: "3-4 cümle" gibi göreceli sınırlar bazı modeller (özellikle Claude) tarafından çok uzun
+    // tek cümlelerle "gaming" edilebiliyordu; bu yüzden somut bir kelime sınırı da ekliyoruz.
+    private String responseLengthHint(String responseLength) {
+        if (responseLength == null || responseLength.isBlank()) return null;
+        return switch (responseLength.trim().toUpperCase()) {
+            case "KISA" -> "ÖNEMLİ - YANIT UZUNLUĞU (ZORUNLU KURAL): Cevabını KISA ve ÖZ tut - yaklaşık 60-80 " +
+                    "kelimeyi (en fazla 3-4 kısa cümle ya da birkaç madde) GEÇME. Gereksiz giriş, tekrar veya " +
+                    "kapanış cümlesi kullanma, doğrudan asıl noktaya gel. Bu kısıtlama, cevabın kalitesinden " +
+                    "değil UZUNLUĞUNDAN ödün vermeni ister; en önemli bilgiyi seç, gerisini at.";
+            case "DETAYLI" -> "ÖNEMLİ - YANIT UZUNLUĞU (ZORUNLU KURAL): Cevabını DETAYLI ve kapsamlı ver - " +
+                    "gerekiyorsa örnekler, alt başlıklar ve gerekçelerle destekle; kısa/yüzeysel bir özetle geçme.";
+            default -> null; // NORMAL
+        };
     }
 
+    // Otomatik Tartışma Modu'nda (useRoles=true) her sağlayıcıya atanan sabit rollerin isimleri
+    // (frontend'e/loglara gösterilebilir) ve modele verilecek talimat metinleri. Index sırası,
+    // debateClients listesindeki sıraya (yani conversation.providers CSV sırasına) karşılık gelir.
+    private static final String[] DEBATE_ROLE_HINTS = {
+            "TARTIŞMA ROLÜN: PRATİK UYGULAYICI. Somut, uygulanabilir, adım adım çözümlere odaklan; " +
+                    "soyut teoriden çok \"bunu nasıl hayata geçiririm\"e odaklan.",
+            "TARTIŞMA ROLÜN: ELEŞTİRMEN / ŞEYTANIN AVUKATI. Diğerlerinin önerilerindeki riskleri, zayıf " +
+                    "noktaları, gözden kaçan senaryoları aktif olarak ara ve sorgula; kolayca ikna olma.",
+            "TARTIŞMA ROLÜN: SENTEZLEYİCİ / TUR REHBERİ. Farklı görüşleri bir araya getirmeye, ortak " +
+                    "noktaları bulmaya ve tartışmayı ileri taşıyacak netleştirici sorular sormaya odaklan."
+    };
+
+    // targetProvider: bu context'in HANGİ sağlayıcıya gönderileceği. Referans blokunda o sağlayıcının
+    // KENDİ önceki cevapları "(SENİN ÖNCEKİ CEVABIN)" diye işaretlenir - böylece model, COMPARE_SYSTEM_HINT'teki
+    // "diğer sağlayıcıları eleştir" talimatını kendi geçmiş cevabına uygulayıp KENDİ KENDİNİ eleştirmez
+    // (önceden gözlemlenen bug: örn. Claude'a giden referans blokunda Claude'un kendi eski cevabı da
+    // diğerleriyle aynı şekilde etiketlenmişti, bu yüzden Claude bazen kendi cevabını da eleştiriyordu).
     private List<AiMessage> buildCompareContext(List<Message> history, Map<Long, List<Message>> answersByParent,
-                                                  Message leaf, AiProvider targetProvider) {
+                                                 Message leaf, AiProvider targetProvider) {
         StringBuilder referenceBlock = new StringBuilder();
         boolean hasAnsweredHistory = false;
-        List<AiMessage> context = new ArrayList<>();
-        context.add(AiMessage.builder()
-                .role(Role.SYSTEM)
-                .content(DEVELOPER_SYSTEM_HINT + "\n\n" + COMPARE_SYSTEM_HINT + "\n\n"
-                        + providerIdentityHint(targetProvider))
-                .build());
-
-        long answeredTurnCount = history.stream()
-                .filter(m -> m.getRole() == Role.USER && answersByParent.containsKey(m.getId()))
-                .count();
-        long skippedTurnCount = Math.max(0, answeredTurnCount - MAX_COMPARE_CONTEXT_TURNS);
-        long processedTurnCount = 0;
 
         for (Message m : history) {
             if (m.getRole() != Role.USER) continue;
             List<Message> answers = answersByParent.get(m.getId());
             if (answers == null || answers.isEmpty()) continue;
-            if (processedTurnCount++ < skippedTurnCount) continue;
 
             hasAnsweredHistory = true;
             referenceBlock.append("Soru: ").append(m.getContent()).append("\n");
             answers.stream()
                     .sorted(Comparator.comparing(Message::getId))
-                    .forEach(a -> referenceBlock.append("- ")
-                            .append(providerLabel(a.getAiProvider()))
-                            .append(a.isSelected() ? " (kullanıcının tercih ettiği cevap): " : ": ")
-                            .append(truncateForContext(a.getContent()))
-                            .append("\n"));
+                    .forEach(a -> {
+                        boolean isOwnAnswer = targetProvider != null && a.getAiProvider() == targetProvider;
+                        referenceBlock.append("- ")
+                                .append(isOwnAnswer ? "SENİN ÖNCEKİ CEVABIN" : providerLabel(a.getAiProvider()))
+                                .append(a.isSelected() ? " (kullanıcının tercih ettiği cevap): " : ": ")
+                                .append(a.getContent())
+                                .append("\n");
+                    });
             referenceBlock.append("\n");
         }
 
+        String effectiveLeafContent = adjustLeafContentForProvider(leaf.getContent(), targetProvider);
+
+        List<AiMessage> context = new ArrayList<>();
         if (!hasAnsweredHistory) {
-            context.add(AiMessage.builder().role(Role.USER).content(leaf.getContent()).build());
+            context.add(AiMessage.builder().role(Role.USER).content(effectiveLeafContent).build());
             return context;
         }
 
-        String userTurn = "=== Önceki karşılaştırma turları (REFERANS içindir, bunlar senin sözlerin değildir) ===\n\n"
+        context.add(AiMessage.builder().role(Role.SYSTEM).content(COMPARE_SYSTEM_HINT).build());
+
+        String userTurn = "=== Önceki karşılaştırma turları (REFERANS içindir; \"SENİN ÖNCEKİ CEVABIN\" diye " +
+                "işaretlenenler HARİÇ bunlar senin sözlerin değildir) ===\n\n"
                 + referenceBlock
                 + "=== Referans sonu ===\n\n"
-                + "Kullanıcının yeni mesajı:\n" + leaf.getContent();
+                + "Kullanıcının yeni mesajı:\n" + effectiveLeafContent;
         context.add(AiMessage.builder().role(Role.USER).content(userTurn).build());
         return context;
     }
@@ -570,14 +718,6 @@ public class ChatService {
     private List<AiMessage> buildIndependentContext(List<Message> history, Map<Long, List<Message>> answersByParent,
                                                       Message leaf, AiProvider targetProvider) {
         List<AiMessage> context = new ArrayList<>();
-        context.add(AiMessage.builder().role(Role.SYSTEM).content(DEVELOPER_SYSTEM_HINT).build());
-        long ownAnsweredTurnCount = history.stream()
-                .filter(m -> m.getRole() == Role.USER)
-                .filter(m -> answersByParent.getOrDefault(m.getId(), List.of()).stream()
-                        .anyMatch(a -> a.getAiProvider() == targetProvider))
-                .count();
-        long skippedTurnCount = Math.max(0, ownAnsweredTurnCount - MAX_INDEPENDENT_CONTEXT_TURNS);
-        long processedTurnCount = 0;
 
         for (Message m : history) {
             if (m.getRole() != Role.USER) continue;
@@ -588,22 +728,65 @@ public class ChatService {
                     .filter(a -> a.getAiProvider() == targetProvider)
                     .findFirst()
                     .orElse(null);
-            if (ownAnswer != null && processedTurnCount++ < skippedTurnCount) continue;
             if (ownAnswer == null) continue; // bu turu targetProvider cevaplamamış -> soru dahil hiç görmesin
 
             context.add(AiMessage.builder().role(Role.USER).content(m.getContent()).build());
-            context.add(AiMessage.builder().role(Role.ASSISTANT).content(truncateForContext(ownAnswer.getContent())).build());
+            context.add(AiMessage.builder().role(Role.ASSISTANT).content(ownAnswer.getContent()).build());
         }
 
-        context.add(AiMessage.builder().role(Role.USER).content(leaf.getContent()).build());
+        String effectiveLeafContent = adjustLeafContentForProvider(leaf.getContent(), targetProvider);
+        context.add(AiMessage.builder().role(Role.USER).content(effectiveLeafContent).build());
         return context;
     }
 
-    private String truncateForContext(String content) {
-        if (content == null || content.length() <= MAX_CONTEXT_ANSWER_CHARS) {
-            return content;
+    private String adjustLeafContentForProvider(String rawContent, AiProvider targetProvider) {
+        if (rawContent == null || !rawContent.contains("[Tartışma Modu -")) {
+            return rawContent;
         }
-        return content.substring(0, MAX_CONTEXT_ANSWER_CHARS) + "\n[Earlier answer truncated for context]";
+
+        AiProvider quotedProvider = null;
+        if (rawContent.contains("QUOTED_PROVIDER:CLAUDE") || rawContent.contains("Claude'in cevabını") || rawContent.contains("Claude'ın cevabını") || rawContent.contains("Claude şu cevabı verdi")) {
+            quotedProvider = AiProvider.CLAUDE;
+        } else if (rawContent.contains("QUOTED_PROVIDER:OPENAI") || rawContent.contains("ChatGPT'nin cevabını") || rawContent.contains("ChatGPT şu cevabı verdi")) {
+            quotedProvider = AiProvider.OPENAI;
+        } else if (rawContent.contains("QUOTED_PROVIDER:GEMINI") || rawContent.contains("Gemini'nin cevabını") || rawContent.contains("Gemini şu cevabı verdi")) {
+            quotedProvider = AiProvider.GEMINI;
+        }
+
+        if (quotedProvider == null) {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("QUOTED_PROVIDER:([A-Z_]+)").matcher(rawContent);
+            if (matcher.find()) {
+                try {
+                    quotedProvider = AiProvider.valueOf(matcher.group(1));
+                } catch (Exception ignored) {}
+            }
+        }
+
+        if (quotedProvider != null && targetProvider != null && quotedProvider == targetProvider) {
+            String userRequest = rawContent;
+            int userReqIndex = rawContent.indexOf("Bu cevap hakkında kullanıcının isteği:");
+            if (userReqIndex != -1) {
+                userRequest = rawContent.substring(userReqIndex + "Bu cevap hakkında kullanıcının isteği:".length()).trim();
+                int stopIndex = userRequest.indexOf("\n\nYalnızca yukarıdaki");
+                if (stopIndex != -1) {
+                    userRequest = userRequest.substring(0, stopIndex).trim();
+                }
+            }
+
+            String quotedText = "";
+            int quoteStart = rawContent.indexOf("\"\"\"\n");
+            int quoteEnd = rawContent.indexOf("\n\"\"\"");
+            if (quoteStart != -1 && quoteEnd != -1 && quoteEnd > quoteStart) {
+                quotedText = rawContent.substring(quoteStart + 4, quoteEnd).trim();
+            }
+
+            return "[Tartışma Modu - Bu senin kendi cevabındır]\n" +
+                   "Önceki turda verdiğin cevabın:\n\"\"\"\n" + quotedText + "\n\"\"\"\n\n" +
+                   "Kullanıcı senin bu cevabın hakkında şu soruyu/isteği iletti: " + userRequest + "\n\n" +
+                   "Talimat: Kendi görüşünü ve pozisyonunu savun, daha ayrıntılı açıkla, netleştir veya kullanıcının sorusunu kendi bakış açınla yanıtla. Kendi kendinle 3. şahıs gibi tartışma veya kendi cevabını başkasıymış gibi eleştirme.";
+        }
+
+        return rawContent;
     }
 
     private String providerLabel(AiProvider provider) {
