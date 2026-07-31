@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Plus,
@@ -12,9 +12,12 @@ import {
   Trash2,
   Check,
   X,
+  Search,
+  Pin,
+  PinOff,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { fetchConversations, renameConversation, deleteConversation } from "../services/chatApi";
+import { fetchConversations, renameConversation, deleteConversation, togglePinConversation } from "../services/chatApi";
 import { getProviderByBackendName, CHAT_MODES } from "../data/aiCatalog";
 
 // "5 dakika önce", "2 saat önce" gibi göreli zaman metni üretir.
@@ -33,11 +36,50 @@ function formatRelativeTime(isoDateString) {
   return date.toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" });
 }
 
+function getProvidersList(providers) {
+  if (!providers) return [];
+  if (Array.isArray(providers)) return providers;
+  if (typeof providers === "string") return providers.split(",").map((p) => p.trim()).filter(Boolean);
+  return [];
+}
+
 const Dashboard = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
   const [conversations, setConversations] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredConversations = useMemo(() => {
+    if (!Array.isArray(conversations)) return [];
+    let list = conversations;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = conversations.filter((c) => {
+        const titleMatch = c.title?.toLowerCase().includes(q);
+        const modeMatch = c.mode?.toLowerCase().includes(q);
+        const pList = getProvidersList(c.providers);
+        const providerMatch = pList.some((p) => p.toLowerCase().includes(q));
+        return titleMatch || modeMatch || providerMatch;
+      });
+    }
+    return [...list].sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+  }, [conversations, searchQuery]);
+
+  const handleTogglePin = async (conversation) => {
+    try {
+      const updated = await togglePinConversation(conversation.id);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversation.id ? { ...c, pinned: updated.pinned } : c))
+      );
+    } catch (error) {
+      console.error("Sabitleme hatası:", error);
+      alert("Sabitleme işlemi gerçekleştirilemedi.");
+    }
+  };
   const [historyState, setHistoryState] = useState("loading"); // loading | ready | error
 
   // Şu an başlığı düzenlenen konuşmanın id'si ve o input'un geçici metni.
@@ -150,9 +192,29 @@ const Dashboard = () => {
         </button>
 
         <section className="dashboard-history">
-          <div className="dashboard-history-title">
-            <Clock size={14} />
-            Sohbet Geçmişi
+          <div className="dashboard-history-header">
+            <div className="dashboard-history-title">
+              <Clock size={16} />
+              <span>Sohbet Geçmişi ({filteredConversations.length})</span>
+            </div>
+
+            {historyState === "ready" && conversations.length > 0 && (
+              <div className="dashboard-search-wrapper">
+                <Search size={15} className="dashboard-search-icon" />
+                <input
+                  type="text"
+                  className="dashboard-search-input"
+                  placeholder="Sohbet başlığı veya model ara..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && (
+                  <button className="dashboard-search-clear" onClick={() => setSearchQuery("")} title="Temizle">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {historyState === "loading" && (
@@ -172,10 +234,16 @@ const Dashboard = () => {
             </div>
           )}
 
-          {historyState === "ready" && conversations.length > 0 && (
+          {historyState === "ready" && conversations.length > 0 && filteredConversations.length === 0 && (
+            <div className="dashboard-history-empty">
+              "{searchQuery}" aramasıyla eşleşen sohbet bulunamadı.
+            </div>
+          )}
+
+          {historyState === "ready" && filteredConversations.length > 0 && (
             <ul className="dashboard-history-list">
-              {conversations.map((conversation) => {
-                const providerDefs = (conversation.providers || [])
+              {filteredConversations.map((conversation) => {
+                const providerDefs = getProvidersList(conversation.providers)
                   .map(getProviderByBackendName)
                   .filter(Boolean);
                 const isEditing = editingId === conversation.id;
@@ -183,9 +251,9 @@ const Dashboard = () => {
 
                 return (
                   <li key={conversation.id}>
-                    <div className={`dashboard-history-item ${isEditing ? "editing" : ""}`}>
+                    <div className={`dashboard-history-item ${isEditing ? "editing" : ""} ${conversation.pinned ? "pinned" : ""}`}>
                       <span className="dashboard-history-item-icon">
-                        <MessageSquare size={16} />
+                        {conversation.pinned ? <Pin size={16} className="text-amber-500" /> : <MessageSquare size={16} />}
                       </span>
 
                       {isEditing ? (
@@ -226,7 +294,14 @@ const Dashboard = () => {
                             className="dashboard-history-item-main"
                             onClick={() => openConversation(conversation.id)}
                           >
-                            <span className="dashboard-history-item-title">{conversation.title}</span>
+                            <span className="dashboard-history-item-title">
+                              {conversation.pinned && (
+                                <span className="pinned-badge" title="Sabitlenmiş sohbet">
+                                  📌 Sabitlendi
+                                </span>
+                              )}
+                              {conversation.title}
+                            </span>
                             <span className="dashboard-history-item-meta">
                               {formatRelativeTime(conversation.createdAt)}
                               {providerDefs.length > 0 && (
@@ -240,6 +315,14 @@ const Dashboard = () => {
                           </button>
 
                           <div className="dashboard-history-item-actions">
+                            <button
+                              type="button"
+                              className={`dashboard-history-action pin ${conversation.pinned ? "active" : ""}`}
+                              title={conversation.pinned ? "Sabitlemeyi Kaldır" : "En Üste Sabitle"}
+                              onClick={() => handleTogglePin(conversation)}
+                            >
+                              {conversation.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                            </button>
                             <button
                               type="button"
                               className="dashboard-history-action"

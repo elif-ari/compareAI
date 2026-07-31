@@ -24,19 +24,21 @@ export const SelectionProvider = ({ children }) => {
   const { user } = useAuth();
   const [providers, setProviders] = useState([]);
   const [mode, setModeState] = useState(CHAT_MODES.INDEPENDENT);
+  const [personaId, setPersonaIdState] = useState(null);
 
-  // Kullanıcı değiştiğinde (login/logout) kendi kayıtlı seçimini yükle.
+  // Kullanıcı değiştiğinde kendi kayıtlı seçimini yükle.
   useEffect(() => {
     const data = loadForUser(user?.email);
-    setProviders(data.providers);
-    setModeState(data.mode);
+    setProviders(data.providers || []);
+    setModeState(data.mode || CHAT_MODES.INDEPENDENT);
+    setPersonaIdState(data.personaId || null);
   }, [user?.email]);
 
   const persist = useCallback(
-    (nextProviders, nextMode) => {
+    (nextProviders, nextMode, nextPersonaId) => {
       localStorage.setItem(
         storageKey(user?.email),
-        JSON.stringify({ providers: nextProviders, mode: nextMode })
+        JSON.stringify({ providers: nextProviders, mode: nextMode, personaId: nextPersonaId })
       );
     },
     [user?.email]
@@ -47,30 +49,37 @@ export const SelectionProvider = ({ children }) => {
       setProviders((prev) => {
         const isSelected = prev.includes(id);
         const next = isSelected ? prev.filter((p) => p !== id) : [...prev, id];
-        persist(next, mode);
+        persist(next, mode, personaId);
         return next;
       });
     },
-    [mode, persist]
+    [mode, personaId, persist]
   );
 
   const setMode = useCallback(
     (nextMode) => {
       setModeState(nextMode);
-      persist(providers, nextMode);
+      persist(providers, nextMode, personaId);
     },
-    [providers, persist]
+    [providers, personaId, persist]
   );
 
-  // Kaydedilmiş bir sohbet geçmişten açıldığında, o konuşmanın kendi providers/mode
-  // bilgisiyle seçim durumunu tek seferde (toggle toggle yapmadan) günceller.
+  const setPersonaId = useCallback(
+    (nextPersonaId) => {
+      setPersonaIdState(nextPersonaId);
+      persist(providers, mode, nextPersonaId);
+    },
+    [providers, mode, persist]
+  );
+
   const setSelection = useCallback(
-    (nextProviders, nextMode) => {
+    (nextProviders, nextMode, nextPersonaId) => {
       const safeProviders = nextProviders || [];
       const safeMode = nextMode || CHAT_MODES.INDEPENDENT;
       setProviders(safeProviders);
       setModeState(safeMode);
-      persist(safeProviders, safeMode);
+      setPersonaIdState(nextPersonaId || null);
+      persist(safeProviders, safeMode, nextPersonaId || null);
     },
     [persist]
   );
@@ -82,8 +91,10 @@ export const SelectionProvider = ({ children }) => {
       value={{
         providers,
         mode,
+        personaId,
         toggleProvider,
         setMode,
+        setPersonaId,
         setSelection,
         isValidSelection,
       }}

@@ -17,6 +17,12 @@ export const fetchConversation = async (conversationId) => {
   return res.data;
 };
 
+// Dashboard: bir konuşmayı sabitler veya sabitlemesini kaldırır.
+export const togglePinConversation = async (conversationId) => {
+  const res = await axios.post(`${API_BASE}/conversations/${conversationId}/pin`);
+  return res.data;
+};
+
 // Dashboard: bir konuşmanın başlığını düzenler.
 export const renameConversation = async (conversationId, title) => {
   const res = await axios.patch(`${API_BASE}/conversations/${conversationId}`, { title });

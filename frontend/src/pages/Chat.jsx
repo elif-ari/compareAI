@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote, Square, Copy, RotateCcw, Maximize2, Minimize2, GitCompare, Sparkles, Download, FileText, Printer, BarChart2, Trophy } from "lucide-react";
+import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote, Square, Copy, RotateCcw, Maximize2, Minimize2, GitCompare, Sparkles, Download, FileText, Printer, BarChart2, Trophy, Search, ChevronUp, ChevronDown } from "lucide-react";
 import axios from "axios";
 import { getProviderById, getProviderByBackendName, CARD_PALETTE, CHAT_MODES } from "../data/aiCatalog";
 import { useSelection } from "../context/SelectionContext";
@@ -8,6 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { fetchConversation } from "../services/chatApi";
 import { streamChatRequest } from "../services/sseStream";
 import MarkdownRenderer from "../components/MarkdownRenderer";
+import AdminPersonaModal from "../components/AdminPersonaModal";
 
 const API_BASE = "http://localhost:8080/api/chat";
 
@@ -71,6 +72,32 @@ const Chat = () => {
   const [expandedProviderId, setExpandedProviderId] = useState(null);
   const [selectedMetricMessage, setSelectedMetricMessage] = useState(null);
   const [turnComparisonLoading, setTurnComparisonLoading] = useState(false);
+
+  // Admin Persona Modal State
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+
+  // Sohbet İçi Arama State'leri
+  const [showInChatSearch, setShowInChatSearch] = useState(false);
+  const [inChatSearchQuery, setInChatSearchQuery] = useState("");
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+
+  const matchingMessageIds = useMemo(() => {
+    if (!inChatSearchQuery.trim() || messages.length === 0) return [];
+    const q = inChatSearchQuery.toLowerCase().trim();
+    return messages
+      .filter((m) => m.content && m.content.toLowerCase().includes(q))
+      .map((m) => m.id);
+  }, [messages, inChatSearchQuery]);
+
+  const handleNextMatch = () => {
+    if (matchingMessageIds.length === 0) return;
+    setCurrentMatchIndex((prev) => (prev + 1) % matchingMessageIds.length);
+  };
+
+  const handlePrevMatch = () => {
+    if (matchingMessageIds.length === 0) return;
+    setCurrentMatchIndex((prev) => (prev - 1 + matchingMessageIds.length) % matchingMessageIds.length);
+  };
 
   const latestUserMessage = useMemo(() => {
     return [...messages].reverse().find((m) => m.role === "USER");
@@ -762,6 +789,13 @@ const Chat = () => {
           </button>
         </div>
         <div className="header-right">
+          <button
+            className={`icon-btn ${showInChatSearch ? "active" : ""}`}
+            onClick={() => setShowInChatSearch((prev) => !prev)}
+            title="Sohbet içinde kelime ara"
+          >
+            <Search size={16} />
+          </button>
           <div className="export-dropdown-wrapper">
             <button
               className="header-export-btn"
@@ -790,6 +824,61 @@ const Chat = () => {
           </button>
         </div>
       </header>
+
+      {/* Sohbet İçi Arama Çubuğu */}
+      {showInChatSearch && (
+        <div className="in-chat-search-bar">
+          <div className="in-chat-search-input-wrapper">
+            <Search size={15} className="in-chat-search-icon" />
+            <input
+              type="text"
+              className="in-chat-search-input"
+              placeholder="Sohbet içinde kelime veya cümle ara..."
+              value={inChatSearchQuery}
+              onChange={(e) => {
+                setInChatSearchQuery(e.target.value);
+                setCurrentMatchIndex(0);
+              }}
+              autoFocus
+            />
+            {inChatSearchQuery && (
+              <button
+                className="in-chat-search-clear"
+                onClick={() => {
+                  setInChatSearchQuery("");
+                  setCurrentMatchIndex(0);
+                }}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {inChatSearchQuery.trim() && (
+            <div className="in-chat-search-meta">
+              <span className="in-chat-search-count">
+                {matchingMessageIds.length > 0
+                  ? `${currentMatchIndex + 1} / ${matchingMessageIds.length} eşleşme`
+                  : "Eşleşme bulunamadı"}
+              </span>
+              {matchingMessageIds.length > 0 && (
+                <div className="in-chat-search-nav">
+                  <button className="icon-btn small" onClick={handlePrevMatch} title="Önceki eşleşme">
+                    <ChevronUp size={14} />
+                  </button>
+                  <button className="icon-btn small" onClick={handleNextMatch} title="Sonraki eşleşme">
+                    <ChevronDown size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <button className="icon-btn close-search-btn" onClick={() => setShowInChatSearch(false)} title="Aramayı kapat">
+            <X size={15} />
+          </button>
+        </div>
+      )}
 
       <div className="main-content">
         <div className="input-section">
@@ -1012,11 +1101,23 @@ const Chat = () => {
                             <span>{question.content.split(":")[0]}</span>
                           </div>
                         ) : (
-                          <div className="bubble bubble-user">{question.content}</div>
+                          <div
+                            className={`bubble bubble-user ${
+                              inChatSearchQuery.trim() && question.content?.toLowerCase().includes(inChatSearchQuery.toLowerCase().trim())
+                                ? "bubble-search-highlight"
+                                : ""
+                            }`}
+                          >
+                            {question.content}
+                          </div>
                         )}
                         {answer ? (
                           <div
-                            className={`bubble bubble-ai ${answer.selected ? "bubble-ai-selected" : ""}`}
+                            className={`bubble bubble-ai ${answer.selected ? "bubble-ai-selected" : ""} ${
+                              inChatSearchQuery.trim() && answer.content?.toLowerCase().includes(inChatSearchQuery.toLowerCase().trim())
+                                ? "bubble-search-highlight"
+                                : ""
+                            }`}
                             style={{ borderColor: palette.border }}
                           >
                             <MarkdownRenderer content={answer.content} />
@@ -1421,6 +1522,12 @@ const Chat = () => {
           </div>
         </div>
       )}
+
+      {/* Admin Persona Modal */}
+      <AdminPersonaModal
+        isOpen={isAdminModalOpen}
+        onClose={() => setIsAdminModalOpen(false)}
+      />
     </div>
   );
 };
