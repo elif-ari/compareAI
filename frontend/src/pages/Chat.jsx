@@ -1,17 +1,15 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote } from "lucide-react";
+import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote, Square, Copy, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
 import axios from "axios";
 import { getProviderById, getProviderByBackendName, CARD_PALETTE, CHAT_MODES } from "../data/aiCatalog";
 import { useSelection } from "../context/SelectionContext";
 import { useAuth } from "../context/AuthContext";
 import { fetchConversation } from "../services/chatApi";
+import { streamChatRequest } from "../services/sseStream";
+import MarkdownRenderer from "../components/MarkdownRenderer";
 
 const API_BASE = "http://localhost:8080/api/chat";
-
-// Otomatik Tartışma Modu'nda sağlayıcıların kendi aralarında kaç tur konuşacağı (backend'de
-// ChatService#runAutoDebate içinde 2-6 arasına sınırlanıyor, güvenlik için burada da aynı varsayılan).
-const DEBATE_ROUNDS = 5;
 
 // Tartışma Modu'nda bir cevabı başka bir sağlayıcıya taşırken önerilen hazır komutlar.
 // {providerName} otomatik olarak referans alınan sağlayıcının adıyla değiştirilir.
@@ -36,9 +34,19 @@ const Chat = () => {
   // "KISA" | "NORMAL" | "DETAYLI" - her mesajla birlikte backend'e gönderilir (bkz. ChatService#
   // responseLengthHint). Kalıcı değildir, istediğin turda değiştirebilirsin.
   const [responseLength, setResponseLength] = useState("NORMAL");
+  // Otomatik Tartışma Modu'nda turların kaç kez döneceği (2-6 arası, varsayılan 5).
+  const [debateRounds, setDebateRounds] = useState(5);
   // Kaydedilmiş bir sohbet URL'den açılıyorsa, mesajlar backend'den gelene kadar kartlarda
   // "Mesajınızı bekliyor..." yerine bir yükleniyor durumu gösterilir.
   const [isLoadingHistory, setIsLoadingHistory] = useState(!!conversationIdFromUrl);
+
+  // STREAMING: şu an cevabı beklenen (henüz gelmemiş) tur. Her sağlayıcının cevabı SSE ile
+  // ayrı ayrı geldiği için (bkz. handleSendMessage/handleStartDebate + services/sseStream.js),
+  // hangi kartların hâlâ "yazıyor..." göstermesi gerektiğini bu state üzerinden takip ediyoruz.
+  // { userMessage: {id, content}, expectedProviders: Set<backendProvider> } | null
+  const [pendingTurn, setPendingTurn] = useState(null);
+  // Otomatik Tartışma Modu'nda canlı ilerleme göstergesi ("Tur 3/5 sürüyor...").
+  const [debateProgress, setDebateProgress] = useState(null); // { round, totalRounds } | null
 
   // Aktif konuşma durumu
   const [conversationId, setConversationId] = useState(null);
@@ -59,8 +67,33 @@ const Chat = () => {
   // { provider, providerName, content, messageId } - bir sonraki kart-bazlı gönderimde bu cevap
   // hedef sağlayıcıya AÇIK BİR ALINTI olarak (backend prompt'unun içine gömülü) iletilir.
   const [quotedRef, setQuotedRef] = useState(null);
+  const [copiedMessageId, setCopiedMessageId] = useState(null);
+  const [expandedProviderId, setExpandedProviderId] = useState(null);
+
+  const expandedProvider = useMemo(
+    () => providers.find((p) => p.id === expandedProviderId),
+    [providers, expandedProviderId]
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && expandedProviderId) {
+        setExpandedProviderId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [expandedProviderId]);
 
   const threadRefs = useRef({});
+  const abortControllerRef = useRef(null);
+
+  const handleStopStream = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, []);
 
   const activeBranchDefinition = useMemo(
     () => providers.find((p) => p.backendProvider === activeBranchProvider),
@@ -168,7 +201,7 @@ const Chat = () => {
   // önceden yalnızca kart gönderiminde uygulanıyordu, bu yüzden üst bardan (ör. Independent modda
   // "X ile devam et" sonrası) gönderilen bir sonraki mesaj alıntıyı tamamen kaybediyordu.
   const wrapWithQuoteIfNeeded = (text, targetBackendProvider) => {
-    if (!quotedRef) return text;
+    if (mode === CHAT_MODES.INDEPENDENT || !quotedRef) return text;
     if (targetBackendProvider && quotedRef.provider === targetBackendProvider) return text; // kendi cevabını kendine alıntılamaya gerek yok
     return (
       `[Tartışma Modu - QUOTED_PROVIDER:${quotedRef.provider} - ${quotedRef.providerName}'in cevabını değerlendiriyorsun]\n` +
@@ -182,6 +215,15 @@ const Chat = () => {
     if (!inputText.trim() || isLoading) return;
 
     const messageToSend = inputText;
+    const targetProviderForThisTurn = activeBranchProvider;
+    const expectedProviders =
+      targetProviderForThisTurn !== null
+        ? new Set([targetProviderForThisTurn])
+        : new Set(providers.map((p) => p.backendProvider));
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setInputText("");
     setIsLoading(true);
 
@@ -194,8 +236,6 @@ const Chat = () => {
       if (conversationId) {
         payload.conversationId = conversationId;
       } else {
-        // Konuşma ilk kez açılıyor: Yeni Sohbet ekranında seçilen ayarları backend'e ilet,
-        // böylece Conversation bu bilgilerle oluşturulur.
         payload.providers = selectedIds.map((id) => getProviderById(id)?.backendProvider).filter(Boolean);
         payload.mode = mode;
         payload.userId = user?.id;
@@ -207,23 +247,49 @@ const Chat = () => {
         }
       }
 
-      const response = await axios.post(API_BASE, payload);
-      const { conversationId: newConvId, currentMessageId, userMessage, aiResponses } = response.data;
+      let lastAiMessageId = null;
+      let aiResponseCount = 0;
 
-      setConversationId(newConvId);
-      setMessages((prev) => [...prev, userMessage, ...aiResponses]);
-      setHeadId(currentMessageId);
-      if (activeBranchProvider !== null && aiResponses.length === 1) {
-        setBranchAnchorId(aiResponses[0].id);
+      await streamChatRequest(`${API_BASE}/stream`, payload, {
+        signal: controller.signal,
+        onEvent: (eventName, data) => {
+          if (eventName === "user_message") {
+            setConversationId(data.conversationId);
+            setMessages((prev) => [...prev, data.userMessage]);
+            setHeadId(data.currentMessageId);
+            setPendingTurn({ userMessage: data.userMessage, expectedProviders });
+          } else if (eventName === "ai_response") {
+            const aiMessage = data.message;
+            aiResponseCount += 1;
+            lastAiMessageId = aiMessage.id;
+            setMessages((prev) => [...prev, aiMessage]);
+            setPendingTurn((prev) => {
+              if (!prev) return prev;
+              const next = new Set(prev.expectedProviders);
+              next.delete(aiMessage.provider);
+              return next.size === 0 ? null : { ...prev, expectedProviders: next };
+            });
+          } else if (eventName === "fatal_error") {
+            throw new Error(data?.message || "Akış sırasında beklenmedik bir hata oluştu.");
+          }
+        },
+      });
+
+      if (targetProviderForThisTurn !== null && aiResponseCount === 1 && lastAiMessageId) {
+        setBranchAnchorId(lastAiMessageId);
       }
-      // Alıntı tek kullanımlıktır: hangi yoldan gönderilirse gönderilsin, gönderim başarılı
-      // olduğunda temizlenir - aksi halde "Tartışma Modu aktif" bandı yanlışlıkla asılı kalır.
       setQuotedRef(null);
     } catch (error) {
-      console.error("Backend hatası:", error);
-      alert("Backend'e ulaşılamadı veya bir hata oluştu. Konsolu kontrol et.");
+      if (error.name === "AbortError" || controller.signal.aborted) {
+        console.log("Yanıt üretimi kullanıcı tarafından durduruldu.");
+      } else {
+        console.error("Backend hatası:", error);
+        alert("Backend'e ulaşılamadı veya bir hata oluştu. Konsolu kontrol et.");
+      }
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
+      setPendingTurn(null);
     }
   };
 
@@ -239,6 +305,8 @@ const Chat = () => {
     if (!text || loadingCardProvider || isLoading || !conversationId) return;
 
     const finalPrompt = wrapWithQuoteIfNeeded(text, backendProvider);
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setCardInputs((prev) => ({ ...prev, [backendProvider]: "" }));
     setLoadingCardProvider(backendProvider);
@@ -250,23 +318,38 @@ const Chat = () => {
         targetProvider: backendProvider,
         responseLength,
       };
-      const response = await axios.post(API_BASE, payload);
+      const response = await axios.post(API_BASE, payload, { signal: controller.signal });
       const { currentMessageId, userMessage, aiResponses } = response.data;
 
       setMessages((prev) => [...prev, userMessage, ...aiResponses]);
       setHeadId(currentMessageId);
-      // Alıntı tek kullanımlıktır: gönderildikten sonra temizlenir.
       setQuotedRef(null);
     } catch (error) {
-      console.error("Karta özel mesaj gönderilemedi:", error);
-      alert("Bu sağlayıcıya mesaj gönderilemedi. Konsolu kontrol et.");
+      if (axios.isCancel(error) || error.name === "AbortError" || controller.signal.aborted) {
+        console.log("Karta özel mesaj durduruldu.");
+      } else {
+        console.error("Karta özel mesaj gönderilemedi:", error);
+        alert("Bu sağlayıcıya mesaj gönderilemedi. Konsolu kontrol et.");
+      }
     } finally {
+      abortControllerRef.current = null;
       setLoadingCardProvider(null);
+    }
+  };
+
+  const handleCopyAnswer = async (messageId, content) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(messageId);
+      setTimeout(() => setCopiedMessageId(null), 2000);
+    } catch (err) {
+      console.error("Cevap kopyalanamadı:", err);
     }
   };
 
   // Bir AI balonundaki "Tartışmaya taşı" ikonuna basıldığında çağrılır.
   const handleQuoteMessage = (backendProvider, providerName, message) => {
+    if (mode === CHAT_MODES.INDEPENDENT) return;
     setQuotedRef({ provider: backendProvider, providerName, content: message.content, messageId: message.id });
   };
 
@@ -313,16 +396,39 @@ const Chat = () => {
     setBranchAnchorId(null);
   };
 
-  // COMPARE modu: kullanıcı bir cevabı "tercih ettim" diye işaretler. HEAD'i taşımaz; backend
-  // bunu bir sonraki turda TÜM sağlayıcıların göreceği ortak context'e ekler.
+  // COMPARE modu: kullanıcı bir cevabı "tercih ettim" diye işaretler (veya tekrar basarak tercihi kaldırır).
   const handlePreferAnswer = async (aiMessage) => {
     if (!conversationId || !aiMessage || isLoading || loadingCardProvider) return;
+
+    const willBeSelected = !aiMessage.selected;
+
+    // Anlık (optimistic) UI güncellemesi: Zaten seçili bir cevapsa hemen kaldır, değilse tercih et
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.parentMessageId === aiMessage.parentMessageId && m.role === "ASSISTANT") {
+          return { ...m, selected: m.id === aiMessage.id ? willBeSelected : false };
+        }
+        return m;
+      })
+    );
+
     try {
       const res = await axios.post(`${API_BASE}/conversations/${conversationId}/prefer`, {
         messageId: aiMessage.id,
       });
       const updatedById = new Map(res.data.map((m) => [m.id, m]));
-      setMessages((prev) => prev.map((m) => (updatedById.has(m.id) ? updatedById.get(m.id) : m)));
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (updatedById.has(m.id)) {
+            const backendMsg = updatedById.get(m.id);
+            return {
+              ...backendMsg,
+              selected: !willBeSelected && m.id === aiMessage.id ? false : backendMsg.selected,
+            };
+          }
+          return m;
+        })
+      );
     } catch (error) {
       console.error("Tercih kaydedilemedi:", error);
       alert("Tercih kaydedilemedi. Konsolu kontrol et.");
@@ -342,13 +448,20 @@ const Chat = () => {
       return;
     }
     const promptToSend = inputText;
+    const expectedProviders = new Set(providers.map((p) => p.backendProvider));
+    const moderatorProvider = providers[0]?.backendProvider;
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setInputText("");
     setIsLoading(true);
+    setDebateProgress({ round: 1, totalRounds: debateRounds });
 
     try {
       const payload = {
         prompt: promptToSend,
-        debateRounds: DEBATE_ROUNDS,
+        debateRounds,
         responseLength,
       };
       if (conversationId) {
@@ -359,18 +472,56 @@ const Chat = () => {
         payload.userId = user?.id;
       }
 
-      const response = await axios.post(`${API_BASE}/debate`, payload);
-      setConversationId(response.data.id);
-      setMessages(response.data.messages || []);
-      setHeadId(response.data.currentMessageId);
+      await streamChatRequest(`${API_BASE}/debate/stream`, payload, {
+        signal: controller.signal,
+        onEvent: (eventName, data) => {
+          if (eventName === "conversation_created") {
+            setConversationId(data.conversationId);
+          } else if (eventName === "turn_message") {
+            setDebateProgress({ round: data.round, totalRounds: data.totalRounds });
+            setMessages((prev) => [...prev, data.message]);
+            setHeadId(data.message.id);
+            setPendingTurn({ userMessage: data.message, expectedProviders: new Set(expectedProviders) });
+          } else if (eventName === "ai_response") {
+            const aiMessage = data.message;
+            setMessages((prev) => [...prev, aiMessage]);
+            setPendingTurn((prev) => {
+              if (!prev) return prev;
+              const next = new Set(prev.expectedProviders);
+              next.delete(aiMessage.provider);
+              return next.size === 0 ? null : { ...prev, expectedProviders: next };
+            });
+          } else if (eventName === "synthesis_trigger") {
+            setMessages((prev) => [...prev, data.message]);
+            setHeadId(data.message.id);
+            setDebateProgress({ round: debateRounds, totalRounds: debateRounds, synthesis: true });
+            if (moderatorProvider) {
+              setPendingTurn({ userMessage: data.message, expectedProviders: new Set([moderatorProvider]) });
+            }
+          } else if (eventName === "synthesis") {
+            setMessages((prev) => [...prev, data.message]);
+            setPendingTurn(null);
+          } else if (eventName === "fatal_error") {
+            throw new Error(data?.message || "Tartışma sırasında beklenmedik bir hata oluştu.");
+          }
+        },
+      });
+
       setQuotedRef(null);
       setActiveBranchProvider(null);
       setBranchAnchorId(null);
     } catch (error) {
-      console.error("Otomatik tartışma başlatılamadı:", error);
-      alert("Otomatik tartışma başlatılamadı. Konsolu kontrol et.");
+      if (error.name === "AbortError" || controller.signal.aborted) {
+        console.log("Otomatik tartışma kullanıcı tarafından durduruldu.");
+      } else {
+        console.error("Otomatik tartışma başlatılamadı:", error);
+        alert("Otomatik tartışma başlatılamadı. Konsolu kontrol et.");
+      }
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
+      setPendingTurn(null);
+      setDebateProgress(null);
     }
   };
 
@@ -430,7 +581,17 @@ const Chat = () => {
               </span>
             </div>
           )}
-          {quotedRef && (
+          {debateProgress && (
+            <div className="branch-banner debate-progress-banner">
+              <Swords size={14} className="debate-progress-icon" />
+              <span>
+                {debateProgress.synthesis
+                  ? "Tartışma tamamlandı, nihai sentez hazırlanıyor..."
+                  : `Otomatik tartışma sürüyor: Tur ${debateProgress.round}/${debateProgress.totalRounds} - modeller cevap verdikçe kartlar canlı olarak doluyor.`}
+              </span>
+            </div>
+          )}
+          {mode === CHAT_MODES.COMPARE && quotedRef && (
             <div className="branch-banner quote-banner">
               <Quote size={14} />
               <span>
@@ -474,6 +635,24 @@ const Chat = () => {
                 </button>
               ))}
             </div>
+
+            {mode === CHAT_MODES.COMPARE && (
+              <div className="response-length-picker debate-rounds-picker">
+                <span className="response-length-label">Tartışma modu:</span>
+                <select
+                  className="debate-rounds-select"
+                  value={debateRounds}
+                  onChange={(e) => setDebateRounds(Number(e.target.value))}
+                  title="Tartışma tur sayısını seç"
+                >
+                  {[2, 3, 4, 5, 6].map((num) => (
+                    <option key={num} value={num}>
+                      {num} Tur
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <div className="input-box">
             <div className="input-box-textarea-wrap">
@@ -489,9 +668,26 @@ const Chat = () => {
                 onKeyDown={handleKeyDown}
                 disabled={isLoading || isLoadingHistory}
               />
-              <button className="send-btn" onClick={handleSendMessage} disabled={isLoading || isLoadingHistory}>
-                {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-              </button>
+              {isLoading || loadingCardProvider ? (
+                <button
+                  type="button"
+                  className="send-btn stop-btn"
+                  onClick={handleStopStream}
+                  title="Yanıt üretmeyi durdur"
+                >
+                  <Square size={14} fill="currentColor" /> Durdur
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="send-btn"
+                  onClick={handleSendMessage}
+                  disabled={isLoadingHistory || !inputText.trim()}
+                  title="Gönder"
+                >
+                  <Send size={18} />
+                </button>
+              )}
             </div>
             {mode === CHAT_MODES.COMPARE && (
               <button
@@ -500,12 +696,12 @@ const Chat = () => {
                 disabled={isLoading || isLoadingHistory || !inputText.trim() || !canStartDebate}
                 title={
                   canStartDebate
-                    ? `Bu soruyu sor, sonra ${providers.length} model kendi aralarında ${DEBATE_ROUNDS} tur otomatik tartışsın, sana nihai sonucu getirsinler`
+                    ? `Bu soruyu sor, sonra ${providers.length} model kendi aralarında ${debateRounds} tur otomatik tartışsın, sana nihai sonucu getirsinler`
                     : "Otomatik tartışma başlatmak için en az 2 model seçmelisin"
                 }
               >
                 {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Swords size={16} />}
-                Tartışma Başlat ({DEBATE_ROUNDS} tur)
+                Tartışma Başlat ({debateRounds} tur)
               </button>
             )}
           </div>
@@ -523,13 +719,26 @@ const Chat = () => {
             const canContinueWith = hasAnyHistory;
             const thread = getProviderThread(provider.backendProvider);
             const isCardLoading = loadingCardProvider === provider.backendProvider;
-            const isQuoteTarget = quotedRef && quotedRef.provider !== provider.backendProvider;
+            const isQuoteTarget = mode === CHAT_MODES.COMPARE && quotedRef && quotedRef.provider !== provider.backendProvider;
+            // STREAMING: bu kart şu an cevap bekleniyor mu? Öyleyse thread'in sonuna cevapsız
+            // (answer: null) bir "tur" ekleyip aşağıda onu bir "yazıyor..." balonu olarak
+            // gösteriyoruz - diğer kartlar kendi cevabı geldiğinde bağımsız olarak dolmaya devam eder.
+            const isPendingHere = !!(pendingTurn && pendingTurn.expectedProviders.has(provider.backendProvider));
+            const displayThread = isPendingHere
+              ? [...thread, { question: pendingTurn.userMessage, answer: null }]
+              : thread;
 
             return (
               <div
                 key={provider.id}
                 className={`ai-card ${isActiveBranch ? "active-branch" : ""} ${isMutedThisTurn ? "muted-card" : ""} ${isQuoteTarget ? "quote-target" : ""}`}
-                style={{ "--card-color": palette.bg, "--card-border": palette.border, "--card-text": palette.text }}
+                style={{
+                  "--card-color": palette.bg,
+                  "--card-border": palette.border,
+                  "--card-text": palette.text,
+                  "--card-selected-bg": palette.selectedBg,
+                  "--card-selected-border": palette.selectedBorder,
+                }}
               >
                 <div className="card-header">
                   <div className="avatar" style={{ background: palette.bg }}>
@@ -541,6 +750,19 @@ const Chat = () => {
                       {provider.vendor} · {provider.detail}
                     </div>
                   </div>
+                  {isPendingHere && (
+                    <span className="card-live-typing" title="Bu model hâlâ cevap yazıyor">
+                      <Loader2 size={13} className="animate-spin" />
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="card-expand-btn"
+                    onClick={() => setExpandedProviderId(provider.id)}
+                    title="Kartı büyüt (Tam Ekran)"
+                  >
+                    <Maximize2 size={14} />
+                  </button>
                 </div>
 
                 {/* Kartın kendi bağımsız sohbet geçmişi - SMS benzeri baloncuklar */}
@@ -552,36 +774,74 @@ const Chat = () => {
                 >
                   {isLoadingHistory ? (
                     <div className="card-thread-empty">Sohbet geçmişi yükleniyor...</div>
-                  ) : thread.length === 0 ? (
+                  ) : displayThread.length === 0 ? (
                     <div className="card-thread-empty">
                       {isMutedThisTurn
                         ? `Bu turda soru sorulmadı (şu an yalnızca ${activeBranchDefinition?.name} ile konuşuluyor).`
                         : "Mesajınızı bekliyor..."}
                     </div>
                   ) : (
-                    thread.map(({ question, answer }) => (
-                      <div className="thread-turn" key={question.id + "-" + answer.id}>
+                    displayThread.map(({ question, answer }) => (
+                      <div className="thread-turn" key={question.id + "-" + (answer ? answer.id : "pending")}>
                         <div className="bubble bubble-user">{question.content}</div>
-                        <div
-                          className={`bubble bubble-ai ${answer.selected ? "bubble-ai-selected" : ""}`}
-                          style={{ borderColor: palette.border }}
-                        >
-                          {answer.content}
-                          <div className="bubble-actions">
-                            {answer.selected && (
-                              <span className="bubble-selected-tag">
-                                <Check size={11} /> Tercih edildi
-                              </span>
-                            )}
-                            <button
-                              className="bubble-quote-btn"
-                              title={`Bu cevabı Tartışma Modu'na taşı (başka bir AI'ya değerlendirt)`}
-                              onClick={() => handleQuoteMessage(provider.backendProvider, provider.name, answer)}
-                            >
-                              <Swords size={12} /> Tartışmaya taşı
-                            </button>
+                        {answer ? (
+                          <div
+                            className={`bubble bubble-ai ${answer.selected ? "bubble-ai-selected" : ""}`}
+                            style={{ borderColor: palette.border }}
+                          >
+                            <MarkdownRenderer content={answer.content} />
+                            <div className="bubble-actions">
+                              {answer.selected && (
+                                <span className="bubble-selected-tag">
+                                  <Check size={11} /> Tercih edildi
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                className="bubble-action-btn"
+                                title="Cevabı kopyala"
+                                onClick={() => handleCopyAnswer(answer.id, answer.content)}
+                              >
+                                {copiedMessageId === answer.id ? (
+                                  <>
+                                    <Check size={11} /> Kopyalandı!
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy size={11} /> Kopyala
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className="bubble-action-btn"
+                                title="Aynı soruyu sadece bu modele tekrar sordur"
+                                onClick={() => handleCardSend(provider.backendProvider, question.content)}
+                                disabled={isLoading || !!loadingCardProvider}
+                              >
+                                <RotateCcw size={11} /> Tekrar üret
+                              </button>
+                              {mode === CHAT_MODES.COMPARE && (
+                                <button
+                                  type="button"
+                                  className="bubble-quote-btn"
+                                  title={`Bu cevabı Tartışma Modu'na taşı (başka bir AI'ya değerlendirt)`}
+                                  onClick={() => handleQuoteMessage(provider.backendProvider, provider.name, answer)}
+                                >
+                                  <Swords size={11} /> Tartışmaya taşı
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          <div className="bubble bubble-ai bubble-ai-pending" style={{ borderColor: palette.border }}>
+                            <span className="typing-dots">
+                              <span></span>
+                              <span></span>
+                              <span></span>
+                            </span>
+                          </div>
+                        )}
                       </div>
                     ))
                   )}
@@ -655,6 +915,154 @@ const Chat = () => {
           })}
         </div>
       </div>
+
+      {/* Fullscreen / Focus Modal */}
+      {expandedProvider && (() => {
+        const palette = CARD_PALETTE[providers.findIndex((p) => p.id === expandedProvider.id) % CARD_PALETTE.length];
+        const thread = getProviderThread(expandedProvider.backendProvider);
+        const isPendingHere = !!(pendingTurn && pendingTurn.expectedProviders.has(expandedProvider.backendProvider));
+        const displayThread = isPendingHere
+          ? [...thread, { question: pendingTurn.userMessage, answer: null }]
+          : thread;
+        const isCardLoading = loadingCardProvider === expandedProvider.backendProvider;
+
+        return (
+          <div className="card-modal-backdrop" onClick={() => setExpandedProviderId(null)}>
+            <div
+              className="card-modal-container"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                "--card-color": palette.bg,
+                "--card-border": palette.border,
+                "--card-text": palette.text,
+                "--card-selected-bg": palette.selectedBg,
+                "--card-selected-border": palette.selectedBorder,
+              }}
+            >
+              <div className="card-modal-header">
+                <div className="card-modal-header-left">
+                  <div className="avatar" style={{ background: palette.bg }}>
+                    {expandedProvider.vendor[0]}
+                  </div>
+                  <div>
+                    <div className="card-modal-title">
+                      <strong>{expandedProvider.name}</strong>
+                      <span className="card-modal-badge">{expandedProvider.vendor} · {expandedProvider.detail}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="card-modal-header-right">
+                  <button
+                    type="button"
+                    className="close-modal-btn"
+                    onClick={() => setExpandedProviderId(null)}
+                    title="Kapat (ESC)"
+                  >
+                    <Minimize2 size={16} /> Küçült
+                  </button>
+                </div>
+              </div>
+
+              <div className="card-modal-body">
+                {isLoadingHistory ? (
+                  <div className="card-thread-empty">Sohbet geçmişi yükleniyor...</div>
+                ) : displayThread.length === 0 ? (
+                  <div className="card-thread-empty">Mesajınızı bekliyor...</div>
+                ) : (
+                  displayThread.map(({ question, answer }) => (
+                    <div className="thread-turn" key={"modal-" + question.id + "-" + (answer ? answer.id : "pending")}>
+                      <div className="bubble bubble-user">{question.content}</div>
+                      {answer ? (
+                        <div
+                          className={`bubble bubble-ai ${answer.selected ? "bubble-ai-selected" : ""}`}
+                          style={{ borderColor: palette.border }}
+                        >
+                          <MarkdownRenderer content={answer.content} />
+                          <div className="bubble-actions">
+                            {answer.selected && (
+                              <span className="bubble-selected-tag">
+                                <Check size={11} /> Tercih edildi
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className="bubble-action-btn"
+                              title="Cevabı kopyala"
+                              onClick={() => handleCopyAnswer(answer.id, answer.content)}
+                            >
+                              {copiedMessageId === answer.id ? (
+                                <>
+                                  <Check size={11} /> Kopyalandı!
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={11} /> Kopyala
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              className="bubble-action-btn"
+                              title="Aynı soruyu sadece bu modele tekrar sordur"
+                              onClick={() => handleCardSend(expandedProvider.backendProvider, question.content)}
+                              disabled={isLoading || !!loadingCardProvider}
+                            >
+                              <RotateCcw size={11} /> Tekrar üret
+                            </button>
+                            {mode === CHAT_MODES.COMPARE && (
+                              <button
+                                type="button"
+                                className="bubble-quote-btn"
+                                title="Bu cevabı Tartışma Modu'na taşı"
+                                onClick={() => handleQuoteMessage(expandedProvider.backendProvider, expandedProvider.name, answer)}
+                              >
+                                <Swords size={11} /> Tartışmaya taşı
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bubble bubble-ai bubble-ai-pending" style={{ borderColor: palette.border }}>
+                          <span className="typing-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="card-modal-footer">
+                <div className="card-input-bar">
+                  <input
+                    type="text"
+                    className="card-input"
+                    placeholder={`${expandedProvider.name}'e özel soru sor... (Enter ile gönder)`}
+                    value={cardInputs[expandedProvider.backendProvider] || ""}
+                    onChange={(e) =>
+                      setCardInputs((prev) => ({ ...prev, [expandedProvider.backendProvider]: e.target.value }))
+                    }
+                    onKeyDown={(e) => handleCardKeyDown(e, expandedProvider.backendProvider)}
+                    disabled={!conversationId || isCardLoading}
+                  />
+                  <button
+                    type="button"
+                    className="card-mini-btn card-send-btn"
+                    title={`Sadece ${expandedProvider.name}'e gönder`}
+                    onClick={() => handleCardSend(expandedProvider.backendProvider)}
+                    disabled={!conversationId || isCardLoading || !(cardInputs[expandedProvider.backendProvider] || "").trim()}
+                  >
+                    {isCardLoading ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

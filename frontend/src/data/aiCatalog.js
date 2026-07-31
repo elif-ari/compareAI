@@ -42,7 +42,28 @@ export const CHAT_MODES = {
 
 // Kart renk paleti (avatar / kenarlık) - index'e göre döngüsel atanır.
 export const CARD_PALETTE = [
-  { bg: "#3b82f6", border: "#bfdbfe", text: "#2563eb", tint: "#eff6ff" },
-  { bg: "#f97316", border: "#fed7aa", text: "#ea580c", tint: "#fff7ed" },
-  { bg: "#10b981", border: "#bbf7d0", text: "#059669", tint: "#ecfdf5" },
+  {
+    bg: "#3b82f6",
+    border: "#bfdbfe",
+    text: "#2563eb",
+    tint: "#eff6ff",
+    selectedBg: "#eff6ff",
+    selectedBorder: "#bfdbfe",
+  },
+  {
+    bg: "#f97316",
+    border: "#fed7aa",
+    text: "#ea580c",
+    tint: "#fff7ed",
+    selectedBg: "#fff7ed",
+    selectedBorder: "#fed7aa",
+  },
+  {
+    bg: "#10b981",
+    border: "#bbf7d0",
+    text: "#059669",
+    tint: "#ecfdf5",
+    selectedBg: "#ecfdf5",
+    selectedBorder: "#bbf7d0",
+  },
 ];
