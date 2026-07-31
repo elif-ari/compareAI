@@ -45,9 +45,16 @@ public class ClaudeClient implements AiClient {
 
         List<ClaudeMessage> messages = sanitizeMessages(request.getMessages());
 
+        int maxTokens = properties.getMaxTokens() > 0 ? properties.getMaxTokens() : 1024;
+        if (systemPrompt.contains("EXTREMELY BRIEF") || systemPrompt.contains("KISA")) {
+            maxTokens = 250;
+        } else if (systemPrompt.contains("EXTENSIVE AND DETAILED") || systemPrompt.contains("DETAYLI")) {
+            maxTokens = 3000;
+        }
+
         ClaudeRequestBody body = new ClaudeRequestBody(
                 properties.getModel(),
-                properties.getMaxTokens() > 0 ? properties.getMaxTokens() : 1024,
+                maxTokens,
                 systemPrompt.isBlank() ? null : List.of(new ClaudeSystemBlock("text", systemPrompt)),
                 messages
         );

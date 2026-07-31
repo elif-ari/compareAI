@@ -104,4 +104,11 @@ public class ChatController {
                                                @Valid @RequestBody SelectMessageRequest request) {
         return chatService.preferAnswer(conversationId, request);
     }
+
+    // COMPARE modunda bir tur tamamlandığında cevaplar arasındaki temel farkları özetler.
+    @PostMapping("/conversations/{conversationId}/turns/{userMessageId}/compare")
+    public MessageResponse generateTurnComparison(@PathVariable Long conversationId,
+                                                   @PathVariable Long userMessageId) {
+        return chatService.generateTurnComparison(conversationId, userMessageId);
+    }
 }

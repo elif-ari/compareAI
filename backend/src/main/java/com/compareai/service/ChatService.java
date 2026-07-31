@@ -31,6 +31,7 @@ import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
@@ -323,6 +324,13 @@ public class ChatService {
 
                 maybeGenerateSmartTitle(conversation, parentMessage, request.getPrompt(), targetClients);
 
+                if (isCompareMode && !hasExplicitCardTarget) {
+                    try {
+                        MessageResponse compSummary = generateTurnComparison(conversation.getId(), userMessage.getId());
+                        sendSseEvent(emitter, emitLock, "comparison_summary", Map.of("summary", compSummary));
+                    } catch (Exception ignored) {}
+                }
+
                 sendSseEvent(emitter, emitLock, "done", Map.of("conversationId", conversation.getId()));
                 emitter.complete();
             } catch (Exception e) {
@@ -447,6 +455,79 @@ public class ChatService {
                 })
                 .filter(c -> c != null)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * COMPARE modunda bir tur tamamlandığında (seçili AI modelleri cevap verdiğinde),
+     * tüm cevaplar arasındaki temel farkları, odak noktalarını ve tonu özetleyen
+     * hızlı bir "Karşılaştırma ve Farklar" analizi üretir.
+     */
+    public MessageResponse generateTurnComparison(Long conversationId, Long userMessageId) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        Message userMessage = messageRepository.findById(userMessageId)
+                .orElseThrow(() -> new ResourceNotFoundException("Mesaj bulunamadı: " + userMessageId));
+
+        List<Message> aiAnswers = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId).stream()
+                .filter(m -> m.getRole() == Role.ASSISTANT
+                        && m.getParentMessage() != null
+                        && m.getParentMessage().getId().equals(userMessageId)
+                        && (m.getContent() == null || !m.getContent().startsWith("[KARŞILAŞTIRMA VE FARKLAR]")))
+                .collect(Collectors.toList());
+
+        if (aiAnswers.isEmpty()) {
+            throw new InvalidBranchOperationException("Bu turda karşılaştırılacak AI cevabı bulunamadı.");
+        }
+
+        // Zaten bu tur için üretilmiş bir karşılaştırma mesajı var mı?
+        Optional<Message> existingComparison = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId).stream()
+                .filter(m -> m.getRole() == Role.ASSISTANT
+                        && m.getContent() != null
+                        && m.getContent().startsWith("[KARŞILAŞTIRMA VE FARKLAR]")
+                        && m.getParentMessage() != null
+                        && m.getParentMessage().getId().equals(userMessageId))
+                .findFirst();
+
+        if (existingComparison.isPresent()) {
+            return toMessageResponse(existingComparison.get());
+        }
+
+        StringBuilder promptBuilder = new StringBuilder();
+        promptBuilder.append("Kullanıcı Sorusu: \"").append(userMessage.getContent()).append("\"\n\n");
+        promptBuilder.append("Modellerin bu soruya verdiği cevaplar aşağıdadır:\n\n");
+
+        for (Message answer : aiAnswers) {
+            String pName = providerLabel(answer.getAiProvider());
+            promptBuilder.append("--- ").append(pName).append(" CEVABI ---\n");
+            promptBuilder.append(answer.getContent()).append("\n\n");
+        }
+
+        promptBuilder.append("Talimat: Yukarıdaki yapay zeka cevaplarını tarafsız bir şekilde KARŞILAŞTIR ve FARKLARI ÖZETLE.\n");
+        promptBuilder.append("Çıktı formatı (Markdown olarak):\n");
+        promptBuilder.append("### ⚡ Cevaplar Arasındaki Temel Farklar\n");
+        promptBuilder.append("- **Odak Noktaları & Üslup:** (Her modelin soruyu ele alış biçimi ve üslubu)\n");
+        promptBuilder.append("- **Öne Çıkan Farklar:** (Örn. X modeli daha pratik kod sundu, Y modeli teorik açıkladı, Z modeli detaylı örnek verdi)\n");
+        promptBuilder.append("- **Ortak / Ayrışan Noktalar:** (Modellerin hemfikir olduğu ve ayrıştığı ana hususlar)\n");
+        promptBuilder.append("- **Kısa Tavsiye:** (Kullanıcının ihtiyacına göre hangi cevabın ne zaman tercih edilebileceği)\n");
+        promptBuilder.append("Kısa, maddeler halinde ve net ol. Yanıt süresini uzatma.");
+
+        AiClient moderator = clientMap.get(AiProvider.OPENAI) != null ? clientMap.get(AiProvider.OPENAI) : clientMap.values().iterator().next();
+
+        List<AiMessage> messages = List.of(
+                AiMessage.builder().role(Role.SYSTEM).content("Sen uzman bir AI Karşılaştırma ve Analiz Asistanısın. Farklı modellerin cevaplarını tarafsızca kıyaslarsın.").build(),
+                AiMessage.builder().role(Role.USER).content(promptBuilder.toString()).build()
+        );
+
+        AiClientResponse clientResponse = moderator.sendPrompt(AiRequest.builder().messages(messages).build());
+
+        Message summaryMsg = new Message();
+        summaryMsg.setConversation(conversation);
+        summaryMsg.setParentMessage(userMessage);
+        summaryMsg.setRole(Role.ASSISTANT);
+        summaryMsg.setAiProvider(moderator.getProvider());
+        summaryMsg.setContent("[KARŞILAŞTIRMA VE FARKLAR]\n" + clientResponse.getContent());
+
+        Message saved = messageRepository.save(summaryMsg);
+        return toMessageResponse(saved);
     }
 
     /**
@@ -803,17 +884,11 @@ public class ChatService {
 
     // Kullanıcının seçtiği "Yanıt Uzunluğu" tercihine göre ek bir sistem talimatı üretir.
     // NORMAL veya tanınmayan/boş bir değer için null döner (ek talimat eklenmez, mevcut davranış).
-    // NOT: "3-4 cümle" gibi göreceli sınırlar bazı modeller (özellikle Claude) tarafından çok uzun
-    // tek cümlelerle "gaming" edilebiliyordu; bu yüzden somut bir kelime sınırı da ekliyoruz.
     private String responseLengthHint(String responseLength) {
         if (responseLength == null || responseLength.isBlank()) return null;
         return switch (responseLength.trim().toUpperCase()) {
-            case "KISA" -> "ÖNEMLİ - YANIT UZUNLUĞU (ZORUNLU KURAL): Cevabını KISA ve ÖZ tut - yaklaşık 60-80 " +
-                    "kelimeyi (en fazla 3-4 kısa cümle ya da birkaç madde) GEÇME. Gereksiz giriş, tekrar veya " +
-                    "kapanış cümlesi kullanma, doğrudan asıl noktaya gel. Bu kısıtlama, cevabın kalitesinden " +
-                    "değil UZUNLUĞUNDAN ödün vermeni ister; en önemli bilgiyi seç, gerisini at.";
-            case "DETAYLI" -> "ÖNEMLİ - YANIT UZUNLUĞU (ZORUNLU KURAL): Cevabını DETAYLI ve kapsamlı ver - " +
-                    "gerekiyorsa örnekler, alt başlıklar ve gerekçelerle destekle; kısa/yüzeysel bir özetle geçme.";
+            case "KISA" -> "<response_length_constraint>CRITICAL INSTRUCTION: KEEP YOUR RESPONSE EXTREMELY BRIEF AND CONCISE. Use maximum 3-4 short sentences or 60 words total. Avoid polite intros or summaries, answer directly.</response_length_constraint>\nÖNEMLİ (ZORUNLU YANIT UZUNLUĞU KURALI): Cevabını ÇOK KISA tut - en fazla 3-4 kısa cümle ya da 60 kelimeyi geçme. Gereksiz giriş/kapanış yapma, doğrudan cevaba gir.";
+            case "DETAYLI" -> "<response_length_constraint>CRITICAL INSTRUCTION: PROVIDE AN EXTENSIVE AND DETAILED RESPONSE. Include examples, subheadings, and in-depth explanations.</response_length_constraint>\nÖNEMLİ (ZORUNLU YANIT UZUNLUĞU KURALI): Cevabını DETAYLI ve kapsamlı ver - örnekler, alt başlıklar ve gerekçelerle derinlemesine destekle.";
             default -> null; // NORMAL
         };
     }
