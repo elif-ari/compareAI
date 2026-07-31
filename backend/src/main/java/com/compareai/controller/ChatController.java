@@ -74,6 +74,12 @@ public class ChatController {
         return chatService.getConversation(conversationId);
     }
 
+    // Dashboard'da bir konuşmayı sabitler veya sabitlemesini kaldırır.
+    @PostMapping("/conversations/{conversationId}/pin")
+    public ConversationSummaryResponse togglePinConversation(@PathVariable Long conversationId) {
+        return chatService.togglePinConversation(conversationId);
+    }
+
     // Dashboard'da bir konuşmanın başlığını düzenler.
     @PatchMapping("/conversations/{conversationId}")
     public ConversationSummaryResponse renameConversation(@PathVariable Long conversationId,

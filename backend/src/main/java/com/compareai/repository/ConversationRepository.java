@@ -11,7 +11,7 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
     // JpaRepository sayesinde save(), findById(), findAll(), deleteById() vb.
     // metodlar hazir geliyor, ekstra kod yazmamiza gerek yok.
 
-    // Dashboard'daki "Sohbet Gecmisi" listesi icin: bir kullaniciya ait tum konusmalari
-    // en yeniden en eskiye siralar.
-    List<Conversation> findByUserIdOrderByCreatedAtDesc(Long userId);
+    // Dashboard'daki "Sohbet Gecmisi" listesi icin: sabitleme durumuna gore (pinli olanlar en ustte),
+    // ardindan en yeniden en eskiye siralar.
+    List<Conversation> findByUserIdOrderByPinnedDescCreatedAtDesc(Long userId);
 }

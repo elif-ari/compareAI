@@ -11,7 +11,7 @@ public class WebConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**") // Tüm endpoint'lere (API'lara) izin ver
                 .allowedOrigins("http://localhost:5173") // Sadece React'in çalıştığı adrese izin ver
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS") // OPTIONS (ön kontrol) isteğine izin ver
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS") // OPTIONS (ön kontrol) isteğine izin ver
                 .allowedHeaders("*")
                 .allowCredentials(true);
     }

@@ -17,8 +17,10 @@ import com.compareai.entity.Message;
 import com.compareai.enums.Role;
 import com.compareai.exception.InvalidBranchOperationException;
 import com.compareai.exception.ResourceNotFoundException;
+import com.compareai.entity.Persona;
 import com.compareai.repository.ConversationRepository;
 import com.compareai.repository.MessageRepository;
+import com.compareai.repository.PersonaRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,16 +43,19 @@ public class ChatService {
 
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
+    private final PersonaRepository personaRepository;
     private final Map<AiProvider, AiClient> clientMap;
     private final Executor taskExecutor;
 
     public ChatService(ConversationRepository conversationRepository,
                        MessageRepository messageRepository,
+                       PersonaRepository personaRepository,
                        List<AiClient> aiClients,
                        @Qualifier("taskExecutor") Executor taskExecutor) {
 
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
+        this.personaRepository = personaRepository;
         this.taskExecutor = taskExecutor;
 
         this.clientMap = new EnumMap<>(AiProvider.class);
@@ -783,9 +788,18 @@ public class ChatService {
      */
     @Transactional(readOnly = true)
     public List<ConversationSummaryResponse> listConversations(Long userId) {
-        return conversationRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
+        return conversationRepository.findByUserIdOrderByPinnedDescCreatedAtDesc(userId).stream()
                 .map(this::toConversationSummaryResponse)
                 .collect(Collectors.toList());
+    }
+
+    // Kullanıcı Dashboard'da bir konuşmayı sabitlediğinde/sabitlemeyi kaldırdığında çağrılır.
+    @Transactional
+    public ConversationSummaryResponse togglePinConversation(Long conversationId) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        conversation.setPinned(!conversation.isPinned());
+        Conversation saved = conversationRepository.save(conversation);
+        return toConversationSummaryResponse(saved);
     }
 
     // Kullanıcı Dashboard'da bir konuşmanın başlığını düzenlediğinde çağrılır.
@@ -820,7 +834,34 @@ public class ChatService {
         if (request.getMode() != null) {
             conversation.setMode(request.getMode());
         }
+
+        // Persona Ayarla (Özel Persona veya Varsayılan)
+        Long personaId = request.getPersonaId();
+        if (personaId != null) {
+            personaRepository.findById(personaId).ifPresent(p -> {
+                conversation.setPersonaId(p.getId());
+                conversation.setPersonaName(p.getName());
+            });
+        } else {
+            personaRepository.findByIsDefaultTrue().ifPresent(p -> {
+                conversation.setPersonaId(p.getId());
+                conversation.setPersonaName(p.getName());
+            });
+        }
+
         return conversationRepository.save(conversation);
+    }
+
+    private String resolvePersonaPrompt(Conversation conversation) {
+        if (conversation.getPersonaId() != null) {
+            Optional<Persona> personaOpt = personaRepository.findById(conversation.getPersonaId());
+            if (personaOpt.isPresent()) {
+                return personaOpt.get().getSystemPrompt();
+            }
+        }
+        return personaRepository.findByIsDefaultTrue()
+                .map(Persona::getSystemPrompt)
+                .orElse("Sen bilgili, yardımsever ve dürüst bir yapay zeka asistanısın. Yanıtlarını net ve yapıcı bir dille sun.");
     }
 
     private Conversation getConversationOrThrow(Long conversationId) {
@@ -938,7 +979,8 @@ public class ChatService {
         // sorunsuz kabul ediyor - o yüzden sırası veya sayısı önemli değil, ekstra client
         // değişikliği gerekmedi.
         List<AiMessage> extras = new ArrayList<>();
-        extras.add(AiMessage.builder().role(Role.SYSTEM).content(DEFAULT_DEVELOPER_SYSTEM_HINT).build());
+        String dynamicPersonaPrompt = resolvePersonaPrompt(conversation);
+        extras.add(AiMessage.builder().role(Role.SYSTEM).content(dynamicPersonaPrompt).build());
         if (personaHint != null && !personaHint.isBlank()) {
             extras.add(AiMessage.builder().role(Role.SYSTEM).content(personaHint).build());
         }
@@ -1119,6 +1161,9 @@ public class ChatService {
                 .title(conversation.getTitle())
                 .providers(splitProviders(conversation.getProviders()))
                 .mode(conversation.getMode())
+                .personaId(conversation.getPersonaId())
+                .personaName(conversation.getPersonaName())
+                .pinned(conversation.isPinned())
                 .currentMessageId(conversation.getCurrentMessageId())
                 .messages(messageResponses)
                 .build();
@@ -1131,6 +1176,9 @@ public class ChatService {
                 .createdAt(conversation.getCreatedAt())
                 .providers(splitProviders(conversation.getProviders()))
                 .mode(conversation.getMode())
+                .personaId(conversation.getPersonaId())
+                .personaName(conversation.getPersonaName())
+                .pinned(conversation.isPinned())
                 .build();
     }
 

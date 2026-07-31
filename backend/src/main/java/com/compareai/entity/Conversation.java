@@ -46,6 +46,15 @@ public class Conversation {
     @Column(length = 20)
     private String mode;
 
+    @Column(name = "persona_id")
+    private Long personaId;
+
+    @Column(name = "persona_name", length = 50)
+    private String personaName;
+
+    @Column(nullable = false)
+    private boolean pinned = false;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

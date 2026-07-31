@@ -23,4 +23,10 @@ public class ConversationSummaryResponse {
 
     // INDEPENDENT | COMPARE
     private String mode;
+
+    private Long personaId;
+
+    private String personaName;
+
+    private boolean pinned;
 }

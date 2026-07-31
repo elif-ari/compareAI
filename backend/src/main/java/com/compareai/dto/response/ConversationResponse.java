@@ -21,6 +21,12 @@ public class ConversationResponse {
     // INDEPENDENT | COMPARE
     private String mode;
 
+    private Long personaId;
+
+    private String personaName;
+
+    private boolean pinned;
+
     // Konuşmanın şu anki HEAD'i - frontend hangi dalın "aktif" gösterileceğini buradan anlar
     private Long currentMessageId;
 
