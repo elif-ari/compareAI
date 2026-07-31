@@ -1,6 +1,6 @@
 # CompareAI
 
-CompareAI, aynı kullanıcı mesajını birden fazla yapay zeka modeline (ChatGPT, Claude ve Gemini) göndererek üretilen cevapları tek ekranda karşılaştırmalı olarak gösteren bir platformdur. Kullanıcı, beğendiği yapay zeka cevabını seçerek konuşmaya o model üzerinden devam edebilir.
+CompareAI, aynı kullanıcı mesajını birden fazla yapay zeka modeline (ChatGPT, Claude ve Gemini) göndererek üretilen cevapları tek ekranda karşılaştırmalı olarak gösteren bir platformdur. Kullanıcı, beğendiği yapay zeka cevabını seçerek konuşmaya o model üzerinden devam edebilir veya modellerin kendi aralarında tartışmasını sağlayabilir.
 
 ---
 
@@ -9,7 +9,7 @@ CompareAI, aynı kullanıcı mesajını birden fazla yapay zeka modeline (ChatGP
 ```
 compareAI/
 ├── backend/              # Spring Boot REST API
-├── frontend/             # React uygulaması (geliştirme aşamasında)
+├── frontend/             # React uygulaması (Vite + React Router)
 ├── docs/                 # Mimari dokümanlar
 └── docker-compose.yml    # MySQL Docker yapılandırması
 ```
@@ -21,14 +21,18 @@ compareAI/
 ## Backend
 - Java 17
 - Spring Boot 3
-- Spring Web
+- Spring Web & SSE (Server-Sent Events)
 - Spring Data JPA
+- BCrypt Password Encoder
 - MySQL
 - Maven
 
 ## Frontend
-- React
-- Axios
+- React (Vite)
+- React Router DOM
+- Axios & Fetch API (ReadableStream SSE)
+- React Markdown & Remark GFM
+- Lucide React (İkon Seti)
 
 ## AI Entegrasyonları
 - OpenAI (ChatGPT)
@@ -38,19 +42,22 @@ compareAI/
 ## Diğer
 - Docker
 - Git
-- Postman
 
 ---
 
 # Mevcut Özellikler
 
-- Çok katmanlı (Layered Architecture) backend yapısı
-- Conversation ve Message veri modeli
-- JPA Repository katmanı
-- Mock AI servisleri
-- Tek endpoint üzerinden çoklu AI isteği
-- REST API mimarisi
-- Postman ile test edilebilir API
+- **Çok Katmanlı Backend Mimarisi:** Controller, Service, Repository ve Entity katmanları.
+- **Canlı Yanıt Akışı (SSE Streaming):** Yanıtlar tek parça beklenmeden sunucudan anında akar (`POST /api/chat/stream` ve `POST /api/chat/debate/stream`).
+- **Canlı Akışı Durdurma (Stop Stream):** İstek akarken kırmızı `[■ Durdur]` butonu ile `AbortController` kullanılarak istek iptal edilebilir.
+- **Zengin Markdown & Kod Kopyalama:** `react-markdown` ve `remark-gfm` entegrasyonu ile kod blokları, tablolar ve listeler biçimlendirilmiş gösterilir. Kod bloklarında 1-tıkla "Kopyala" ikonu mevculttur.
+- **Otomatik Tartışma Modu (Auto Debate):** Seçilen modellerin belirlenen tur sayısı kadar (2-6 tur) birbirlerinin fikirlerini savunmasını/eleştirmesini ve en son bir moderatör modelin nihai sentez üretmesini sağlar.
+- **Dinamik Tur Sayısı Seçici:** Tartışma modu için `[ 2 Tur ]` - `[ 6 Tur ]` arası dinamik açılır menü (dropdown).
+- **Cevap Kopyalama & Tekrar Üret (Regenerate):** Her AI yanıt balonunda tek tıkla cevabı kopyalama ve soruyu sadece o modele yeniden sordurma imkanı.
+- **Tam Ekran Kart Odağı (Maximize Focus View):** Kart sağ üstündeki büyütme ikonuyla (ESC ile kapanan) 88vh boyutunda odaklanmış okuma ve sohbet modali.
+- **Yumuşak Pastel Tercih Renkleri & Tercih Kaldırma (Toggle):** `✓ Tercih edildi` olarak işaretlenen cevaplarda modellerin marka renklerine özel (Mavi, Turuncu, Yeşil) yumuşak pastel arka planlar kullanılır. Tercih butona tekrar tıklandığında anında kaldırılabilir (toggle).
+- **Bağımsız Sohbet Modu (Independent Chat):** Modellerin birbirini görmediği, tartışma alıntıları içermeyen sade multi-bot sohbet modu.
+- **Gerçek Veritabanı Tabanlı Auth:** `POST /api/auth/register` ve `POST /api/auth/login` endpoint'leri üzerinden BCrypt şifreli kullanıcı kaydı ve girişi.
 
 ---
 
@@ -74,7 +81,17 @@ veya IntelliJ IDEA üzerinden `CompareAiApplication` sınıfını çalıştırı
 
 ---
 
-## 2. MySQL (Docker)
+## 2. Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+---
+
+## 3. MySQL (Docker)
 
 ```bash
 docker-compose up -d
@@ -82,117 +99,28 @@ docker-compose up -d
 
 ---
 
-# API
+# API Endpoint'leri
 
-## Mesaj Gönder
-
+## 1. Canlı Chat Akışı (SSE)
 ```
-POST /api/chat
-```
-
-Body (Text):
-
-```
-Merhaba
+POST /api/chat/stream
 ```
 
-Örnek Response
-
-```json
-[
-  {
-    "provider": "OPENAI",
-    "response": "[ChatGPT MOCK CEVABI] Sorduğun soru: \"Merhaba\"",
-    "success": true,
-    "error": null
-  },
-  {
-    "provider": "CLAUDE",
-    "response": "[CLAUDE MOCK CEVABI] Sorduğun soru: \"Merhaba\"",
-    "success": true,
-    "error": null
-  },
-  {
-    "provider": "GEMINI",
-    "response": "[GEMINI MOCK CEVABI] Sorduğun soru: \"Merhaba\"",
-    "success": true,
-    "error": null
-  }
-]
+## 2. Otomatik Tartışma Akışı (SSE)
+```
+POST /api/chat/debate/stream
 ```
 
----
+## 3. Cevap Tercih Etme / Kaldırma (Toggle)
+```
+POST /api/chat/conversations/{conversationId}/prefer
+```
 
-# Frontend Kullanıcı Akışı (v1)
-
-Frontend artık React Router ile 4 adımlı bir akış üzerinden çalışıyor:
-
-1. **`/login`** — Kayıt / Giriş. Backend'de auth servisi olmadığı için bu v1'de
-   tarayıcı `localStorage`'ında tutulan basit bir demo hesap sistemidir (üretimde
-   gerçek bir backend auth servisine bağlanmalı).
-2. **`/select`** — Karşılaştırılacak yapay zekaları grupları içinde seç
-   (Büyük ticari modeller, Açık kaynak modeller, Kod odaklı modeller, Vision
-   modelleri). En az **2**, en fazla **10** model seçilebilir.
-3. **`/keys`** — Seçilen her model için API anahtarını yapıştır. Anahtarlar
-   yalnızca tarayıcıda saklanır.
-4. **`/compare`** — Seçilen sayıda (2-10) konteynerin gösterildiği karşılaştırma
-   ekranı.
-
-**Önemli:** v1'de backend'e hiçbir değişiklik yapılmadı — hâlâ yalnızca 3 mock
-client var (`OPENAI`, `CLAUDE`, `GEMINI`). Bu yüzden seçim ekranında **ChatGPT,
-Claude ve Gemini "Canlı"** etiketiyle işaretli ve gerçekten backend'den cevap
-alıyor; listedeki diğer tüm modeller (Grok, Llama, Mistral, DeepSeek vb.) v1'de
-yalnızca arayüzün nasıl büyüyeceğini göstermek amacıyla seçilebilir durumda,
-ama gerçek bir API çağrısı yapmıyorlar ("v2'de aktif olacak" etiketi).
-
-## Bu oturumda düzeltilen buglar
-
-- **Konuşma sürekliliği kırıktı:** `handleSendMessage` backend'e `conversationId`
-  göndermiyordu, bu yüzden her mesaj yeni bir konuşma açıyordu. Artık aktif
-  konuşma id'si state'te tutuluyor ve her istekle birlikte gönderiliyor.
-- **Geçmiş sohbetler tıklanamıyordu:** Sol menüdeki `history-item` butonlarında
-  `onClick` yoktu. Artık bir sohbete tıklayınca `GET /conversations/{id}` ile
-  tüm mesajlar çekilip ilgili dal (branch) ekrana yansıtılıyor.
-- **"X ile devam et" arayüze yansımıyordu:** Dal seçimi backend'de kaydediliyordu
-  ama ekranda hiçbir şey değişmiyordu. Artık seçilen kart görsel olarak
-  vurgulanıyor ve konuşmanın HEAD'i güncelleniyor.
-- **Sidebar'da görsel bug:** `index.css` içinde `border-right: 1px border #e2e8f0;`
-  geçersiz bir CSS değeriydi (`solid` yerine `border` yazılmıştı), bu yüzden
-  sidebar'ın sağ kenarlığı hiç görünmüyordu.
-
-## Bu turda yapılan değişiklikler
-
-- **Asıl bug düzeltildi — tek sağlayıcı ile devam etme:** Daha önce bir karta
-  "X ile devam et" tıklandığında backend'de dal (branch) doğru değişiyordu ama
-  üstteki mesaj kutusu hâlâ her zaman 3 sağlayıcıya birden soruyordu. Artık
-  "devam et" tıklanınca mod değişiyor: bir sonraki mesaj SADECE o sağlayıcıya
-  gidiyor (diğer kartlar o turda cevap vermiyor, üstte bunu belirten bir
-  banner çıkıyor). Farklı bir sağlayıcıya geçildiğinde (örn. Claude), o
-  sağlayıcının konuşma boyunca verdiği EN SON cevaptan devam ediliyor —
-  aradaki diğer sağlayıcı mesajlarından habersiz, kendi dalındaki bağlamla.
-  "Tümüne dön" butonuyla tekrar broadcast (3'üne birden sorma) moduna
-  dönülebiliyor.
-- **Geçmiş sohbetler kaldırıldı:** `/compare` sayfasındaki sol menü ve geçmiş
-  konuşma listesi arayüzden kaldırıldı. Backend tarafında da yalnızca bu
-  amaca hizmet eden `GET /api/chat/conversations` endpoint'i,
-  `ChatService.getAllConversations()`, `ConversationRepository.findAllByOrderByCreatedAtDesc()`
-  ve `ConversationSummaryResponse` DTO'su temizlendi.
-- **`/select` sayfasına "Seçimleri temizle" butonu eklendi** — tek tek
-  tıklamak yerine tüm seçimi tek seferde sıfırlayabiliyorsun.
-- **Giriş/Kayıt artık gerçek bir veritabanına bağlı:** `app_users` tablosu
-  (yeni `AppUser` entity'si) MySQL'de otomatik oluşturuluyor
-  (`spring.jpa.hibernate.ddl-auto=update` sayesinde, elle bir şey yapmana
-  gerek yok). Parolalar `spring-security-crypto`'nun `BCryptPasswordEncoder`'ı
-  ile hash'leniyor — **bilinçli olarak** `spring-boot-starter-security`
-  eklenmedi, çünkü o tüm endpoint'leri otomatik olarak login arkasına
-  kilitleyip mevcut açık chat endpoint'lerini bozardı. Yeni endpoint'ler:
-  `POST /api/auth/register`, `POST /api/auth/login`.
-- `/keys` sayfasına eklenen "Atla (arayüzü test et)" butonu duruyor —
-  key girmeden `/compare`'a geçip arayüzü test edebilirsin.
-
-
-
-Detaylı mimari açıklamaları ve diyagramlar `docs/architecture.md` dosyasında yer almaktadır.
+## 4. Kimlik Doğrulama
+```
+POST /api/auth/register
+POST /api/auth/login
+```
 
 ---
 
@@ -200,26 +128,21 @@ Detaylı mimari açıklamaları ve diyagramlar `docs/architecture.md` dosyasınd
 
 ## Tamamlananlar
 
-- [x] Spring Boot backend kurulumu
-- [x] MySQL bağlantısı
+- [x] Spring Boot backend ve MySQL kurulumu
 - [x] Docker Compose yapılandırması
-- [x] Conversation ve Message entity'leri
-- [x] Repository katmanı
-- [x] Mock OpenAI servisi
-- [x] Mock Claude servisi
-- [x] Mock Gemini servisi
-- [x] ChatService
-- [x] ChatController
-- [x] Mock AI entegrasyon testi (Postman)
+- [x] Conversation, Message ve AppUser entity'leri
+- [x] SSE (Server-Sent Events) canlı yanıt akışı
+- [x] AbortController ile canlı isteği durdurma (Stop Stream)
+- [x] React Markdown & Remark GFM ile zengin metin ve kod bloğu kopyalama
+- [x] Otomatik Tartışma Modu (2-6 tur arası açılır menü seçici ve nihai sentez)
+- [x] Cevabı Kopyala ve Tekrar Üret (Regenerate) butonları
+- [x] Tam ekran kart odaklama (Maximize focus view modal)
+- [x] Yumuşak pastel tercih temaları ve tercihi kaldırma (toggle)
+- [x] Bağımsız Sohbet (Independent Chat) ve Karşılaştırmalı Sohbet (Compare Chat) modları
+- [x] BCrypt şifreli veritabanı tabanlı Giriş / Kayıt (Auth) sistemi
 
-## Devam Eden
+## Gelecek Planlar (v2)
 
-- [ ] CompletableFuture ile paralel AI çağrıları
-- [ ] Gerçek OpenAI API entegrasyonu
-- [ ] Gerçek Claude API entegrasyonu
-- [ ] Gerçek Gemini API entegrasyonu
-- [ ] React kullanıcı arayüzü
-- [ ] Konuşma geçmişi
-- [ ] Branch (beğenilen cevaptan devam etme)
-- [ ] Responsive tasarım
-- [ ] Hata yönetimi
+- [ ] Canlı OpenAI, Claude ve Gemini API anahtar entegrasyonu
+- [ ] Diğer açık kaynak modellerin (Llama, DeepSeek vb.) canlı servise bağlanması
+- [ ] Sohbet geçmişini dışa aktarma (PDF / Markdown export)
