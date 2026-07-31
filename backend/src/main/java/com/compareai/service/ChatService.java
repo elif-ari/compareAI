@@ -385,9 +385,10 @@ public class ChatService {
                 // TUR 2..N
                 for (int round = 2; round <= rounds; round++) {
                     String trigger = "🔁 Otomatik Tartışma - Tur " + round + "/" + rounds + ": Bir önceki turda " +
-                            "diğer modellerin verdiği cevapları dikkate alarak kendi pozisyonunu SAVUN, GELİŞTİR ya " +
-                            "da gerekiyorsa DEĞİŞTİR. Katılmadığın noktaları açıkça belirt, gerekirse yeni bir " +
-                            "sentez/uzlaşı öner.";
+                            "diğer modellerin verdiği cevapları dikkatle değerlendir. Yanıtında şu 3 noktaya net biçimde değin:\n" +
+                            "1. Diğer modellerin fikirlerine katılıp katılmadığın (Neden katıldın / katılmadın?)\n" +
+                            "2. Önceki görüşünü değiştirip değiştirmediğin (Fikrin değiştiyse nedeni)\n" +
+                            "3. Bu tur itibarıyla ortak vardığınız uzlaşı noktası.";
                     currentLeaf = saveSystemTriggerMessage(conversation, currentLeaf, trigger);
                     sendSseEvent(emitter, emitLock, "turn_message",
                             Map.of("round", round, "totalRounds", rounds, "message", toMessageResponse(currentLeaf)));
@@ -395,10 +396,21 @@ public class ChatService {
                             request.getResponseLength(), personaHints, round, rounds);
                 }
 
-                // NİHAİ SENTEZ
-                String synthesisTrigger = "🏁 Nihai Sentez: Yukarıdaki " + rounds + " turluk tartışmayı özetle. " +
-                        "Modellerin hangi noktalarda hemfikir olduğunu, hangi noktalarda ayrıştığını kısaca belirt, " +
-                        "sonra kullanıcının ORİJİNAL sorusuna kendi nihai/dengeli önerini net biçimde ver.";
+                // NİHAİ SENTEZ & KONSENSÜS
+                String synthesisTrigger = "🏆 NİHAİ KARSEN VE SENTEZ: Yukarıdaki " + rounds + " turluk tartışmayı analiz et ve aşağıdaki FORMATTA yanıt üret:\n\n" +
+                        "[DEBATE_CONSENSUS]\n" +
+                        "# 🏆 3 Modelin Ortak Kararı ve Nihai Cevabı\n\n" +
+                        "### 📊 Modeller Fikirlerini Nasıl Değiştirdi?\n" +
+                        "- **ChatGPT:** (Nasıl yaklaştı, nerede sabit kaldı veya esnedi?)\n" +
+                        "- **Claude:** (Neden katıldı / katılmadı, neye itiraz etti?)\n" +
+                        "- **Gemini:** (Görüşü nasıl evrildi, neden fikir değiştirdi?)\n\n" +
+                        "### 🤝 Modellerin Tam Anlaştığı Noktalar\n" +
+                        "1. (Tüm modellerin mutabık kaldığı 1. nokta)\n" +
+                        "2. (Tüm modellerin mutabık kaldığı 2. nokta)\n\n" +
+                        "### ⚡ Farklı Düşünülen Noktalar\n" +
+                        "- (Hangi model hangi detayda farklı düşünüyor?)\n\n" +
+                        "### 💡 Ortak Tavsiye ve Yanıt (Nihai Cevap)\n" +
+                        "(Kullanıcının orijinal sorusuna 3 modelin ortak aklından süzülen eksiksiz, en kaliteli nihai yanıt)";
                 Message synthesisLeaf = saveSystemTriggerMessage(conversation, currentLeaf, synthesisTrigger);
                 sendSseEvent(emitter, emitLock, "synthesis_trigger",
                         Map.of("message", toMessageResponse(synthesisLeaf)));
@@ -589,20 +601,29 @@ public class ChatService {
         // TUR 2..N: sırayla, otomatik tetikleyici mesajlarla devam eder.
         for (int round = 2; round <= rounds; round++) {
             String trigger = "🔁 Otomatik Tartışma - Tur " + round + "/" + rounds + ": Bir önceki turda " +
-                    "diğer modellerin verdiği cevapları dikkate alarak kendi pozisyonunu SAVUN, GELİŞTİR ya " +
-                    "da gerekiyorsa DEĞİŞTİR. Katılmadığın noktaları açıkça belirt, gerekirse yeni bir " +
-                    "sentez/uzlaşı öner.";
+                    "diğer modellerin verdiği cevapları dikkatle değerlendir. Yanıtında şu 3 noktaya net biçimde değin:\n" +
+                    "1. Diğer modellerin fikirlerine katılıp katılmadığın (Neden katıldın / katılmadın?)\n" +
+                    "2. Önceki görüşünü değiştirip değiştirmediğin (Fikrin değiştiyse nedeni)\n" +
+                    "3. Bu tur itibarıyla ortak vardığınız uzlaşı noktası.";
             currentLeaf = saveSystemTriggerMessage(conversation, currentLeaf, trigger);
             runBroadcastTurn(conversation, currentLeaf, debateClients, request.getResponseLength(), finalPersonaHints);
         }
 
-        // NİHAİ SENTEZ: moderatör (seçili sağlayıcıların ilki) tüm tartışmayı özetleyip TEK bir
-        // nihai cevap üretir. runBroadcastTurn yerine tekli çağrı kullanıyoruz çünkü burada birden
-        // fazla değil, TEK bir moderatör cevabı istiyoruz. Moderatöre KASITLI OLARAK persona rolü
-        // verilmiyor (rolü ne olursa olsun burada tarafsız bir sentez yapması isteniyor).
-        String synthesisTrigger = "🏁 Nihai Sentez: Yukarıdaki " + rounds + " turluk tartışmayı özetle. " +
-                "Modellerin hangi noktalarda hemfikir olduğunu, hangi noktalarda ayrıştığını kısaca belirt, " +
-                "sonra kullanıcının ORİJİNAL sorusuna kendi nihai/dengeli önerini net biçimde ver.";
+        // NİHAİ SENTEZ & KONSENSÜS
+        String synthesisTrigger = "🏆 NİHAİ KARAR VE SENTEZ: Yukarıdaki " + rounds + " turluk tartışmayı analiz et ve aşağıdaki FORMATTA yanıt üret:\n\n" +
+                "[DEBATE_CONSENSUS]\n" +
+                "# 🏆 3 Modelin Ortak Kararı ve Nihai Cevabı\n\n" +
+                "### 📊 Modeller Fikirlerini Nasıl Değiştirdi?\n" +
+                "- **ChatGPT:** (Nasıl yaklaştı, nerede sabit kaldı veya esnedi?)\n" +
+                "- **Claude:** (Neden katıldı / katılmadı, neye itiraz etti?)\n" +
+                "- **Gemini:** (Görüşü nasıl evrildi, neden fikir değiştirdi?)\n\n" +
+                "### 🤝 Modellerin Tam Anlaştığı Noktalar\n" +
+                "1. (Tüm modellerin mutabık kaldığı 1. nokta)\n" +
+                "2. (Tüm modellerin mutabık kaldığı 2. nokta)\n\n" +
+                "### ⚡ Farklı Düşünülen Noktalar\n" +
+                "- (Hangi model hangi detayda farklı düşünüyor?)\n\n" +
+                "### 💡 Ortak Tavsiye ve Yanıt (Nihai Cevap)\n" +
+                "(Kullanıcının orijinal sorusuna 3 modelin ortak aklından süzülen eksiksiz, en kaliteli nihai yanıt)";
         Message synthesisLeaf = saveSystemTriggerMessage(conversation, currentLeaf, synthesisTrigger);
 
         AiClient moderator = debateClients.get(0);
@@ -617,7 +638,20 @@ public class ChatService {
 
     private MessageResponse callProviderAndSave(AiClient client, AiRequest aiRequest,
                                                 Conversation conversation, Message parentMessage) {
+        long startTime = System.currentTimeMillis();
         AiClientResponse clientResponse = client.sendPrompt(aiRequest);
+        long latencyMs = System.currentTimeMillis() - startTime;
+
+        int inputTokens = clientResponse.getInputTokens() != null
+                ? clientResponse.getInputTokens()
+                : estimateTokens(aiRequest.getMessages().stream().map(AiMessage::getContent).collect(Collectors.joining(" ")));
+        int outputTokens = clientResponse.getOutputTokens() != null
+                ? clientResponse.getOutputTokens()
+                : estimateTokens(clientResponse.getContent());
+        long finalLatency = clientResponse.getLatencyMs() != null ? clientResponse.getLatencyMs() : latencyMs;
+        double cost = clientResponse.getEstimatedCost() != null
+                ? clientResponse.getEstimatedCost()
+                : calculateCost(client.getProvider(), inputTokens, outputTokens);
 
         Message aiMessage = new Message();
         aiMessage.setConversation(conversation);
@@ -625,9 +659,46 @@ public class ChatService {
         aiMessage.setRole(Role.ASSISTANT);
         aiMessage.setAiProvider(client.getProvider());
         aiMessage.setContent(clientResponse.getContent());
+        aiMessage.setLatencyMs(finalLatency);
+        aiMessage.setInputTokens(inputTokens);
+        aiMessage.setOutputTokens(outputTokens);
+        aiMessage.setEstimatedCost(cost);
 
         Message saved = messageRepository.save(aiMessage);
         return toMessageResponse(saved);
+    }
+
+    private int estimateTokens(String text) {
+        if (text == null || text.isBlank()) return 0;
+        return Math.max(1, (int) Math.ceil(text.length() / 4.0));
+    }
+
+    private double calculateCost(AiProvider provider, int inputTokens, int outputTokens) {
+        if (provider == null) return 0.0;
+        double inputPricePer1M;
+        double outputPricePer1M;
+
+        switch (provider) {
+            case OPENAI:
+                inputPricePer1M = 0.15;
+                outputPricePer1M = 0.60;
+                break;
+            case CLAUDE:
+                inputPricePer1M = 3.00;
+                outputPricePer1M = 15.00;
+                break;
+            case GEMINI:
+                inputPricePer1M = 0.10;
+                outputPricePer1M = 0.40;
+                break;
+            default:
+                inputPricePer1M = 0.20;
+                outputPricePer1M = 0.80;
+                break;
+        }
+
+        double cost = ((inputTokens / 1_000_000.0) * inputPricePer1M) + ((outputTokens / 1_000_000.0) * outputPricePer1M);
+        return Math.round(cost * 1_000_000.0) / 1_000_000.0;
     }
 
     /**
@@ -1078,6 +1149,10 @@ public class ChatService {
                 .provider(message.getAiProvider() != null ? message.getAiProvider().name() : null)
                 .content(message.getContent())
                 .selected(message.isSelected())
+                .latencyMs(message.getLatencyMs())
+                .inputTokens(message.getInputTokens())
+                .outputTokens(message.getOutputTokens())
+                .estimatedCost(message.getEstimatedCost())
                 .createdAt(message.getCreatedAt())
                 .build();
     }

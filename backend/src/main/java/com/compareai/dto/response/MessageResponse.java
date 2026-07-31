@@ -24,6 +24,12 @@ public class MessageResponse {
     // Compare modunda: kullanıcı bu cevabı o turda "tercih ettim" diye işaretlediyse true.
     private boolean selected;
 
+    // Performans & Maliyet Metrikleri
+    private Long latencyMs;
+    private Integer inputTokens;
+    private Integer outputTokens;
+    private Double estimatedCost;
+
     private LocalDateTime createdAt;
 
 }

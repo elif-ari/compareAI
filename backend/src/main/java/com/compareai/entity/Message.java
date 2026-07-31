@@ -51,6 +51,12 @@ public class Message {
     @Column(nullable = false)
     private boolean selected = false;
 
+    // Performans & Maliyet Metrikleri
+    private Long latencyMs;
+    private Integer inputTokens;
+    private Integer outputTokens;
+    private Double estimatedCost;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

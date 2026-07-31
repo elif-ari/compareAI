@@ -12,4 +12,10 @@ import lombok.NoArgsConstructor;
 public class AiClientResponse {
 
     private String content;
+
+    // Performans & Maliyet Metrikleri
+    private Long latencyMs;
+    private Integer inputTokens;
+    private Integer outputTokens;
+    private Double estimatedCost;
 }
