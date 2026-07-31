@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote, Square, Copy, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
+import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote, Square, Copy, RotateCcw, Maximize2, Minimize2, GitCompare, Sparkles, Download, FileText, Printer } from "lucide-react";
 import axios from "axios";
 import { getProviderById, getProviderByBackendName, CARD_PALETTE, CHAT_MODES } from "../data/aiCatalog";
 import { useSelection } from "../context/SelectionContext";
@@ -69,6 +69,183 @@ const Chat = () => {
   const [quotedRef, setQuotedRef] = useState(null);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
   const [expandedProviderId, setExpandedProviderId] = useState(null);
+  const [turnComparisonLoading, setTurnComparisonLoading] = useState(false);
+
+  const latestUserMessage = useMemo(() => {
+    return [...messages].reverse().find((m) => m.role === "USER");
+  }, [messages]);
+
+  const currentTurnComparison = useMemo(() => {
+    if (!latestUserMessage) return null;
+    return messages.find(
+      (m) =>
+        m.role === "ASSISTANT" &&
+        m.parentMessageId === latestUserMessage.id &&
+        m.content &&
+        m.content.startsWith("[KARŞILAŞTIRMA VE FARKLAR]")
+    );
+  }, [messages, latestUserMessage]);
+
+  const handleGenerateComparison = async (userMsgId) => {
+    if (!conversationId || !userMsgId || turnComparisonLoading) return;
+    setTurnComparisonLoading(true);
+    try {
+      const res = await axios.post(`${API_BASE}/conversations/${conversationId}/turns/${userMsgId}/compare`);
+      setMessages((prev) => {
+        const exists = prev.some((m) => m.id === res.data.id);
+        return exists ? prev.map((m) => (m.id === res.data.id ? res.data : m)) : [...prev, res.data];
+      });
+    } catch (err) {
+      console.error("Karşılaştırma üretilemedi:", err);
+    } finally {
+      setTurnComparisonLoading(false);
+    }
+  };
+
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  const escapeHtml = (str) => {
+    if (!str) return "";
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  };
+
+  const handleExportMarkdown = () => {
+    if (!messages || messages.length === 0) {
+      alert("Dışa aktarılacak sohbet mesajı bulunamadı.");
+      return;
+    }
+
+    let mdText = `# CompareAI Sohbet Raporu\n\n`;
+    mdText += `**Tarih:** ${new Date().toLocaleString("tr-TR")}\n`;
+    mdText += `**Mod:** ${mode === CHAT_MODES.COMPARE ? "Karşılaştırmalı Sohbet & Tartışma" : "Bağımsız Sohbet"}\n`;
+    mdText += `**Modeller:** ${providers.map((p) => p.name).join(", ")}\n\n`;
+    mdText += `---\n\n`;
+
+    const userMsgs = messages.filter((m) => m.role === "USER");
+    userMsgs.forEach((userMsg, idx) => {
+      mdText += `## 👤 Tur ${idx + 1}: ${userMsg.content}\n\n`;
+
+      const aiAnswers = messages.filter(
+        (m) => m.role === "ASSISTANT" && m.parentMessageId === userMsg.id
+      );
+
+      aiAnswers.forEach((aiMsg) => {
+        if (aiMsg.content?.startsWith("[KARŞILAŞTIRMA VE FARKLAR]")) {
+          mdText += `### ⚡ Cevaplar Arasındaki Temel Farklar & Karşılaştırma\n\n`;
+          mdText += `${aiMsg.content.replace("[KARŞILAŞTIRMA VE FARKLAR]\n", "")}\n\n`;
+        } else {
+          const providerInfo = getProviderByBackendName(aiMsg.provider);
+          const pName = providerInfo ? providerInfo.name : aiMsg.provider || "Yapay Zeka";
+          mdText += `### 🤖 ${pName}\n\n`;
+          mdText += `${aiMsg.content}\n\n`;
+        }
+      });
+
+      mdText += `---\n\n`;
+    });
+
+    const blob = new Blob([mdText], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `CompareAI_Sohbet_${new Date().toISOString().slice(0, 10)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportPDF = () => {
+    if (!messages || messages.length === 0) {
+      alert("Dışa aktarılacak sohbet mesajı bulunamadı.");
+      return;
+    }
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      alert("Yazdırma penceresi açılamadı. Lütfen tarayıcınızın engelleyicisini kontrol edin.");
+      return;
+    }
+
+    let htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>CompareAI Sohbet Raporu</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 32px; color: #1e293b; line-height: 1.6; max-width: 900px; margin: 0 auto; }
+          h1 { color: #4338ca; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-top: 0; font-size: 1.8rem; }
+          .meta { background: #f8fafc; border: 1px solid #e2e8f0; padding: 14px 18px; border-radius: 10px; font-size: 0.9rem; color: #475569; margin-bottom: 28px; }
+          .turn { margin-bottom: 32px; border-bottom: 1px dashed #cbd5e1; padding-bottom: 24px; }
+          .user-msg { background: #eef2ff; border-left: 4px solid #4338ca; color: #312e81; padding: 12px 16px; border-radius: 6px; font-weight: 600; margin-bottom: 18px; font-size: 1.05rem; }
+          .ai-box { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
+          .ai-name { font-weight: 700; color: #0f172a; margin-bottom: 8px; font-size: 0.95rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 6px; }
+          .comparison-box { background: linear-gradient(135deg, #f0f9ff 0%, #faf5ff 100%); border: 1px solid #c7d2fe; border-radius: 10px; padding: 16px 20px; color: #312e81; margin-top: 20px; }
+          .comparison-title { font-weight: 700; color: #4338ca; margin-bottom: 8px; font-size: 1rem; }
+          .content-text { white-space: pre-wrap; font-size: 0.92rem; }
+        </style>
+      </head>
+      <body>
+        <h1>CompareAI Sohbet Raporu</h1>
+        <div class="meta">
+          <strong>Tarih:</strong> ${new Date().toLocaleString("tr-TR")}<br/>
+          <strong>Sohbet Modu:</strong> ${mode === CHAT_MODES.COMPARE ? "Karşılaştırmalı Sohbet & Tartışma" : "Bağımsız Sohbet"}<br/>
+          <strong>Seçili Modeller:</strong> ${providers.map((p) => p.name).join(", ")}
+        </div>
+    `;
+
+    const userMsgs = messages.filter((m) => m.role === "USER");
+    userMsgs.forEach((userMsg, idx) => {
+      htmlContent += `<div class="turn">`;
+      htmlContent += `<div class="user-msg">👤 Tur ${idx + 1}: ${escapeHtml(userMsg.content)}</div>`;
+
+      const aiAnswers = messages.filter(
+        (m) => m.role === "ASSISTANT" && m.parentMessageId === userMsg.id
+      );
+
+      aiAnswers.forEach((aiMsg) => {
+        if (aiMsg.content?.startsWith("[KARŞILAŞTIRMA VE FARKLAR]")) {
+          htmlContent += `
+            <div class="comparison-box">
+              <div class="comparison-title">⚡ Cevaplar Arasındaki Temel Farklar & Karşılaştırma</div>
+              <div class="content-text">${escapeHtml(aiMsg.content.replace("[KARŞILAŞTIRMA VE FARKLAR]\n", ""))}</div>
+            </div>
+          `;
+        } else {
+          const providerInfo = getProviderByBackendName(aiMsg.provider);
+          const pName = providerInfo ? providerInfo.name : aiMsg.provider || "Yapay Zeka";
+          htmlContent += `
+            <div class="ai-box">
+              <div class="ai-name">🤖 ${pName}</div>
+              <div class="content-text">${escapeHtml(aiMsg.content)}</div>
+            </div>
+          `;
+        }
+      });
+
+      htmlContent += `</div>`;
+    });
+
+    htmlContent += `
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 300);
+          }
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
 
   const expandedProvider = useMemo(
     () => providers.find((p) => p.id === expandedProviderId),
@@ -269,6 +446,10 @@ const Chat = () => {
               next.delete(aiMessage.provider);
               return next.size === 0 ? null : { ...prev, expectedProviders: next };
             });
+          } else if (eventName === "comparison_summary") {
+            if (data?.summary) {
+              setMessages((prev) => [...prev, data.summary]);
+            }
           } else if (eventName === "fatal_error") {
             throw new Error(data?.message || "Akış sırasında beklenmedik bir hata oluştu.");
           }
@@ -557,6 +738,25 @@ const Chat = () => {
           </button>
         </div>
         <div className="header-right">
+          <div className="export-dropdown-wrapper">
+            <button
+              className="header-export-btn"
+              onClick={() => setShowExportMenu((prev) => !prev)}
+              title="Sohbeti dışa aktar (PDF / Markdown)"
+            >
+              <Download size={14} /> Dışa Aktar
+            </button>
+            {showExportMenu && (
+              <div className="export-menu" onClick={() => setShowExportMenu(false)}>
+                <button className="export-menu-item" onClick={handleExportMarkdown}>
+                  <FileText size={14} /> Markdown (.md) Olarak İndir
+                </button>
+                <button className="export-menu-item" onClick={handleExportPDF}>
+                  <Printer size={14} /> PDF Olarak Yazdır / İndir
+                </button>
+              </div>
+            )}
+          </div>
           <span className="setup-user">{user?.name}</span>
           <button className="header-edit-btn" onClick={() => navigate("/new-chat")}>
             <Settings2 size={14} /> Sohbet ayarları
@@ -914,6 +1114,48 @@ const Chat = () => {
             );
           })}
         </div>
+
+        {/* COMPARE Modunda: Cevaplar Arasındaki Temel Farklar & Karşılaştırma Kartı */}
+        {mode === CHAT_MODES.COMPARE && latestUserMessage && (
+          <div className="turn-comparison-wrapper">
+            {turnComparisonLoading ? (
+              <div className="turn-comparison-card loading">
+                <Sparkles size={18} className="animate-spin text-indigo-600" />
+                <span>Modellerin cevapları analiz ediliyor ve farklar özetleniyor...</span>
+              </div>
+            ) : currentTurnComparison ? (
+              <div className="turn-comparison-card">
+                <div className="turn-comparison-header">
+                  <div className="turn-comparison-title">
+                    <GitCompare size={18} className="text-indigo-600" />
+                    <span>Cevaplar Arasındaki Temel Farklar & Karşılaştırma</span>
+                  </div>
+                  <button
+                    className="turn-comparison-refresh-btn"
+                    onClick={() => handleGenerateComparison(latestUserMessage.id)}
+                    title="Karşılaştırmayı Yenile"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                </div>
+                <div className="turn-comparison-body">
+                  <MarkdownRenderer
+                    content={currentTurnComparison.content.replace("[KARŞILAŞTIRMA VE FARKLAR]\n", "")}
+                  />
+                </div>
+              </div>
+            ) : (
+              <button
+                className="generate-comparison-btn"
+                onClick={() => handleGenerateComparison(latestUserMessage.id)}
+                disabled={isLoading || loadingCardProvider}
+              >
+                <Sparkles size={16} />
+                Cevaplar Arasındaki Farkları Özetle (Karşılaştır)
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Fullscreen / Focus Modal */}
