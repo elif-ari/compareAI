@@ -635,6 +635,36 @@ body {
   }
 }
 
+.bubble-metrics-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.08);
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.metric-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.metric-cost {
+  color: #047857;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  font-weight: 700;
+}
+
 .bubble-actions {
   display: flex;
   align-items: center;
@@ -1920,4 +1950,205 @@ body {
 .export-menu-item:hover {
   background: #f1f5f9;
   color: #4338ca;
+}
+
+/* Floating Metrics Modal */
+.metrics-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(4px);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.15s ease-in-out;
+}
+
+.metrics-modal-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 380px;
+  box-shadow: 0 20px 35px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  animation: modalSlideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.metrics-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.metrics-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #1e293b;
+}
+
+.metrics-modal-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  border: 1px solid #f1f5f9;
+}
+
+.metric-label {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.metric-value {
+  color: #0f172a;
+  font-weight: 600;
+  font-family: 'Fira Code', monospace, sans-serif;
+}
+
+.metric-total-row {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.metric-total-row .metric-label {
+  color: #3730a3;
+}
+
+.metric-total-row .metric-value {
+  color: #4338ca;
+}
+
+.metric-cost-row {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.metric-cost-row .metric-label {
+  color: #065f46;
+}
+
+.cost-value {
+  color: #047857;
+  font-weight: 700;
+}
+
+/* Unified Report Card (Tek Birleşik Kategori) */
+.unified-report-wrapper {
+  margin: 20px 0 10px 0;
+}
+
+.unified-report-card {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+  background: #ffffff;
+}
+
+.unified-report-card.loading {
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  color: #475569;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.unified-report-card.consensus-theme {
+  border: 1px solid #fde68a;
+}
+
+.unified-report-card.consensus-theme .unified-report-header {
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border-bottom: 1px solid #fde68a;
+  color: #92400e;
+}
+
+.unified-report-card.consensus-theme .unified-report-badge {
+  background: #d97706;
+  color: #ffffff;
+}
+
+.unified-report-card.compare-theme {
+  border: 1px solid #c7d2fe;
+}
+
+.unified-report-card.compare-theme .unified-report-header {
+  background: linear-gradient(135deg, #f0f9ff 0%, #eef2ff 100%);
+  border-bottom: 1px solid #c7d2fe;
+  color: #3730a3;
+}
+
+.unified-report-card.compare-theme .unified-report-badge {
+  background: #4338ca;
+  color: #ffffff;
+}
+
+.unified-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  cursor: default;
+}
+
+.unified-report-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.unified-report-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.unified-report-body {
+  padding: 20px 24px;
+}
+
+/* Debate Round Indicator Badge */
+.debate-round-indicator {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0 8px 0;
+}
+
+.debate-round-indicator span {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }

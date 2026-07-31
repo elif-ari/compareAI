@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote, Square, Copy, RotateCcw, Maximize2, Minimize2, GitCompare, Sparkles, Download, FileText, Printer } from "lucide-react";
+import { Send, Loader2, Plus, Settings2, LogOut, Radio, X, Check, Swords, Quote, Square, Copy, RotateCcw, Maximize2, Minimize2, GitCompare, Sparkles, Download, FileText, Printer, BarChart2, Trophy } from "lucide-react";
 import axios from "axios";
 import { getProviderById, getProviderByBackendName, CARD_PALETTE, CHAT_MODES } from "../data/aiCatalog";
 import { useSelection } from "../context/SelectionContext";
@@ -69,6 +69,7 @@ const Chat = () => {
   const [quotedRef, setQuotedRef] = useState(null);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
   const [expandedProviderId, setExpandedProviderId] = useState(null);
+  const [selectedMetricMessage, setSelectedMetricMessage] = useState(null);
   const [turnComparisonLoading, setTurnComparisonLoading] = useState(false);
 
   const latestUserMessage = useMemo(() => {
@@ -85,6 +86,15 @@ const Chat = () => {
         m.content.startsWith("[KARŞILAŞTIRMA VE FARKLAR]")
     );
   }, [messages, latestUserMessage]);
+
+  const currentConsensusMessage = useMemo(() => {
+    return [...messages].reverse().find(
+      (m) =>
+        m.role === "ASSISTANT" &&
+        m.content &&
+        m.content.startsWith("[DEBATE_CONSENSUS]")
+    );
+  }, [messages]);
 
   const handleGenerateComparison = async (userMsgId) => {
     if (!conversationId || !userMsgId || turnComparisonLoading) return;
@@ -254,13 +264,14 @@ const Chat = () => {
 
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === "Escape" && expandedProviderId) {
-        setExpandedProviderId(null);
+      if (e.key === "Escape") {
+        if (expandedProviderId) setExpandedProviderId(null);
+        if (selectedMetricMessage) setSelectedMetricMessage(null);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [expandedProviderId]);
+  }, [expandedProviderId, selectedMetricMessage]);
 
   const threadRefs = useRef({});
   const abortControllerRef = useRef(null);
@@ -348,12 +359,25 @@ const Chat = () => {
     (backendProvider) => {
       const answerByParentId = new Map();
       messages.forEach((m) => {
-        if (m.role === "ASSISTANT" && m.provider === backendProvider && m.parentMessageId != null) {
+        if (
+          m.role === "ASSISTANT" &&
+          m.provider === backendProvider &&
+          m.parentMessageId != null &&
+          !m.content?.startsWith("[DEBATE_CONSENSUS]") &&
+          !m.content?.startsWith("[KARŞILAŞTIRMA VE FARKLAR]")
+        ) {
           answerByParentId.set(m.parentMessageId, m);
         }
       });
 
-      const userMessages = messages.filter((m) => m.role === "USER").sort((a, b) => a.id - b.id);
+      const userMessages = messages
+        .filter(
+          (m) =>
+            m.role === "USER" &&
+            !m.content?.startsWith("🏁 Nihai Sentez") &&
+            !m.content?.startsWith("🏆 NİHAİ KONSENSÜS")
+        )
+        .sort((a, b) => a.id - b.id);
 
       const thread = [];
       userMessages.forEach((q) => {
@@ -983,7 +1007,13 @@ const Chat = () => {
                   ) : (
                     displayThread.map(({ question, answer }) => (
                       <div className="thread-turn" key={question.id + "-" + (answer ? answer.id : "pending")}>
-                        <div className="bubble bubble-user">{question.content}</div>
+                        {question.content?.startsWith("🔁 Otomatik Tartışma") || question.content?.startsWith("🏁 Nihai Sentez") || question.content?.startsWith("🏆 NİHAİ KONSENSÜS") ? (
+                          <div className="debate-round-indicator">
+                            <span>{question.content.split(":")[0]}</span>
+                          </div>
+                        ) : (
+                          <div className="bubble bubble-user">{question.content}</div>
+                        )}
                         {answer ? (
                           <div
                             className={`bubble bubble-ai ${answer.selected ? "bubble-ai-selected" : ""}`}
@@ -996,6 +1026,14 @@ const Chat = () => {
                                   <Check size={11} /> Tercih edildi
                                 </span>
                               )}
+                              <button
+                                type="button"
+                                className="bubble-action-btn"
+                                title="Yanıt süresi, token ve maliyet detayları"
+                                onClick={() => setSelectedMetricMessage(answer)}
+                              >
+                                <BarChart2 size={11} /> Metrikler
+                              </button>
                               <button
                                 type="button"
                                 className="bubble-action-btn"
@@ -1115,20 +1153,35 @@ const Chat = () => {
           })}
         </div>
 
-        {/* COMPARE Modunda: Cevaplar Arasındaki Temel Farklar & Karşılaştırma Kartı */}
+        {/* BİRLEŞİK KARŞILAŞTIRMA VE ORTAK KARAR KARTI (TEK KATEGORİ) */}
         {mode === CHAT_MODES.COMPARE && latestUserMessage && (
-          <div className="turn-comparison-wrapper">
+          <div className="unified-report-wrapper">
             {turnComparisonLoading ? (
-              <div className="turn-comparison-card loading">
+              <div className="unified-report-card loading">
                 <Sparkles size={18} className="animate-spin text-indigo-600" />
-                <span>Modellerin cevapları analiz ediliyor ve farklar özetleniyor...</span>
+                <span>Modellerin cevapları analiz ediliyor ve ortak rapor hazırlanıyor...</span>
+              </div>
+            ) : currentConsensusMessage ? (
+              <div className="unified-report-card consensus-theme">
+                <div className="unified-report-header">
+                  <div className="unified-report-title">
+                    <Trophy size={18} className="text-amber-600" />
+                    <span>3 Modelin Karşılaştırması & Ortak Kararı</span>
+                  </div>
+                  <span className="unified-report-badge">Ortak Rapor</span>
+                </div>
+                <div className="unified-report-body">
+                  <MarkdownRenderer
+                    content={currentConsensusMessage.content.replace("[DEBATE_CONSENSUS]\n", "")}
+                  />
+                </div>
               </div>
             ) : currentTurnComparison ? (
-              <div className="turn-comparison-card">
-                <div className="turn-comparison-header">
-                  <div className="turn-comparison-title">
+              <div className="unified-report-card compare-theme">
+                <div className="unified-report-header">
+                  <div className="unified-report-title">
                     <GitCompare size={18} className="text-indigo-600" />
-                    <span>Cevaplar Arasındaki Temel Farklar & Karşılaştırma</span>
+                    <span>Cevap Karşılaştırması & Öne Çıkan Farklar</span>
                   </div>
                   <button
                     className="turn-comparison-refresh-btn"
@@ -1138,7 +1191,7 @@ const Chat = () => {
                     <RotateCcw size={14} />
                   </button>
                 </div>
-                <div className="turn-comparison-body">
+                <div className="unified-report-body">
                   <MarkdownRenderer
                     content={currentTurnComparison.content.replace("[KARŞILAŞTIRMA VE FARKLAR]\n", "")}
                   />
@@ -1151,7 +1204,7 @@ const Chat = () => {
                 disabled={isLoading || loadingCardProvider}
               >
                 <Sparkles size={16} />
-                Cevaplar Arasındaki Farkları Özetle (Karşılaştır)
+                Cevapları Karşılaştır ve Özetle
               </button>
             )}
           </div>
@@ -1213,7 +1266,13 @@ const Chat = () => {
                 ) : (
                   displayThread.map(({ question, answer }) => (
                     <div className="thread-turn" key={"modal-" + question.id + "-" + (answer ? answer.id : "pending")}>
-                      <div className="bubble bubble-user">{question.content}</div>
+                      {question.content?.startsWith("🔁 Otomatik Tartışma") || question.content?.startsWith("🏁 Nihai Sentez") || question.content?.startsWith("🏆 NİHAİ KONSENSÜS") ? (
+                        <div className="debate-round-indicator">
+                          <span>{question.content.split(":")[0]}</span>
+                        </div>
+                      ) : (
+                        <div className="bubble bubble-user">{question.content}</div>
+                      )}
                       {answer ? (
                         <div
                           className={`bubble bubble-ai ${answer.selected ? "bubble-ai-selected" : ""}`}
@@ -1226,6 +1285,14 @@ const Chat = () => {
                                 <Check size={11} /> Tercih edildi
                               </span>
                             )}
+                            <button
+                              type="button"
+                              className="bubble-action-btn"
+                              title="Yanıt süresi, token ve maliyet detayları"
+                              onClick={() => setSelectedMetricMessage(answer)}
+                            >
+                              <BarChart2 size={11} /> Metrikler
+                            </button>
                             <button
                               type="button"
                               className="bubble-action-btn"
@@ -1305,6 +1372,55 @@ const Chat = () => {
           </div>
         );
       })()}
+
+      {/* Performans & Maliyet Metrikleri Modal / Popover */}
+      {selectedMetricMessage && (
+        <div className="metrics-modal-backdrop" onClick={() => setSelectedMetricMessage(null)}>
+          <div className="metrics-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="metrics-modal-header">
+              <div className="metrics-modal-title">
+                <BarChart2 size={16} className="text-indigo-600" />
+                <span>Performans & Maliyet Detayları</span>
+              </div>
+              <button className="icon-btn" onClick={() => setSelectedMetricMessage(null)} title="Kapat (ESC)">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="metrics-modal-body">
+              <div className="metric-row">
+                <span className="metric-label">⏱️ Yanıt Süresi</span>
+                <span className="metric-value">
+                  {selectedMetricMessage.latencyMs != null
+                    ? (selectedMetricMessage.latencyMs / 1000).toFixed(2) + " sn"
+                    : "-"}
+                </span>
+              </div>
+              <div className="metric-row">
+                <span className="metric-label">📥 Giriş Token (Input)</span>
+                <span className="metric-value">{selectedMetricMessage.inputTokens ?? "-"} token</span>
+              </div>
+              <div className="metric-row">
+                <span className="metric-label">📤 Çıkış Token (Output)</span>
+                <span className="metric-value">{selectedMetricMessage.outputTokens ?? "-"} token</span>
+              </div>
+              <div className="metric-row metric-total-row">
+                <span className="metric-label">🪙 Toplam Token</span>
+                <span className="metric-value font-bold">
+                  {(selectedMetricMessage.inputTokens || 0) + (selectedMetricMessage.outputTokens || 0)} token
+                </span>
+              </div>
+              <div className="metric-row metric-cost-row">
+                <span className="metric-label">💵 Tahmini API Maliyeti</span>
+                <span className="metric-value cost-value">
+                  {selectedMetricMessage.estimatedCost != null
+                    ? `$${selectedMetricMessage.estimatedCost < 0.0001 ? "<0.0001" : selectedMetricMessage.estimatedCost.toFixed(5)}`
+                    : "-"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
