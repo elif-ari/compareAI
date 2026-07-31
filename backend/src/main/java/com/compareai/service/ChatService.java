@@ -22,6 +22,9 @@ import com.compareai.repository.MessageRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.io.IOException;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -251,6 +254,166 @@ public class ChatService {
         return futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
     }
 
+    private void sendSseEvent(SseEmitter emitter, Object lock, String eventName, Object data) {
+        try {
+            synchronized (lock) {
+                emitter.send(SseEmitter.event().name(eventName).data(data));
+            }
+        } catch (IOException | IllegalStateException e) {
+            // yut
+        }
+    }
+
+    private List<MessageResponse> runBroadcastTurnStreaming(SseEmitter emitter, Object emitLock,
+                                                             Conversation conversation, Message leafMessage,
+                                                             List<AiClient> clients, String responseLength,
+                                                             Map<AiProvider, String> personaHints,
+                                                             int round, int totalRounds) {
+        List<CompletableFuture<MessageResponse>> futures = clients.stream()
+                .map(client -> CompletableFuture.supplyAsync(() -> {
+                    String personaHint = personaHints != null ? personaHints.get(client.getProvider()) : null;
+                    List<AiMessage> context = buildContext(conversation, leafMessage, client.getProvider(),
+                            responseLength, personaHint);
+                    AiRequest aiRequest = AiRequest.builder().messages(context).build();
+                    MessageResponse response = callProviderAndSave(client, aiRequest, conversation, leafMessage);
+                    sendSseEvent(emitter, emitLock, "ai_response",
+                            Map.of("round", round, "totalRounds", totalRounds, "message", response));
+                    return response;
+                }, taskExecutor))
+                .collect(Collectors.toList());
+
+        return futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
+    }
+
+    public SseEmitter streamMessage(ChatRequest request) {
+        SseEmitter emitter = new SseEmitter(120_000L);
+        Object emitLock = new Object();
+
+        Runnable task = () -> {
+            try {
+                Conversation conversation = resolveConversation(request);
+                Message parentMessage = resolveParentMessage(request, conversation);
+
+                Message userMessage = new Message();
+                userMessage.setConversation(conversation);
+                userMessage.setParentMessage(parentMessage);
+                userMessage.setRole(Role.USER);
+                userMessage.setContent(request.getPrompt());
+                userMessage = messageRepository.save(userMessage);
+
+                conversation.setCurrentMessageId(userMessage.getId());
+                conversationRepository.save(conversation);
+
+                boolean isCompareMode = "COMPARE".equalsIgnoreCase(conversation.getMode());
+                boolean hasExplicitCardTarget = request.getTargetProvider() != null && !request.getTargetProvider().isBlank();
+                Boolean effectiveAskAllProviders = isCompareMode
+                        ? (hasExplicitCardTarget ? Boolean.FALSE : Boolean.TRUE)
+                        : request.getAskAllProviders();
+                List<AiClient> targetClients = resolveTargetClients(parentMessage, effectiveAskAllProviders,
+                        request.getTargetProvider());
+
+                sendSseEvent(emitter, emitLock, "user_message", Map.of(
+                        "conversationId", conversation.getId(),
+                        "currentMessageId", conversation.getCurrentMessageId(),
+                        "userMessage", toMessageResponse(userMessage)
+                ));
+
+                runBroadcastTurnStreaming(emitter, emitLock, conversation, userMessage, targetClients,
+                        request.getResponseLength(), null, 1, 1);
+
+                maybeGenerateSmartTitle(conversation, parentMessage, request.getPrompt(), targetClients);
+
+                sendSseEvent(emitter, emitLock, "done", Map.of("conversationId", conversation.getId()));
+                emitter.complete();
+            } catch (Exception e) {
+                sendSseEvent(emitter, emitLock, "fatal_error", Map.of("message", String.valueOf(e.getMessage())));
+                emitter.completeWithError(e);
+            }
+        };
+
+        new Thread(task, "chat-stream-" + System.currentTimeMillis()).start();
+        return emitter;
+    }
+
+    public SseEmitter streamAutoDebate(ChatRequest request) {
+        SseEmitter emitter = new SseEmitter(300_000L);
+        Object emitLock = new Object();
+
+        Runnable task = () -> {
+            try {
+                int requestedRounds = request.getDebateRounds() != null ? request.getDebateRounds() : 5;
+                int rounds = Math.max(2, Math.min(requestedRounds, 6));
+
+                Conversation conversation = resolveConversation(request);
+                conversation.setMode("COMPARE");
+                conversationRepository.save(conversation);
+
+                Message parentMessage = resolveParentMessage(request, conversation);
+
+                List<AiClient> debateClients = resolveDebateClients(conversation);
+                if (debateClients.size() < 2) {
+                    throw new InvalidBranchOperationException(
+                            "Otomatik Tartışma Modu en az 2 sağlayıcı seçilmesini gerektirir.");
+                }
+
+                Map<AiProvider, String> personaHints = null;
+                if (Boolean.TRUE.equals(request.getUseRoles())) {
+                    personaHints = new EnumMap<>(AiProvider.class);
+                    for (int i = 0; i < debateClients.size(); i++) {
+                        personaHints.put(debateClients.get(i).getProvider(), DEBATE_ROLE_HINTS[i % DEBATE_ROLE_HINTS.length]);
+                    }
+                }
+
+                sendSseEvent(emitter, emitLock, "conversation_created", Map.of("conversationId", conversation.getId()));
+
+                // TUR 1
+                Message currentLeaf = saveSystemTriggerMessage(conversation, parentMessage, request.getPrompt());
+                sendSseEvent(emitter, emitLock, "turn_message",
+                        Map.of("round", 1, "totalRounds", rounds, "message", toMessageResponse(currentLeaf)));
+                maybeGenerateSmartTitle(conversation, parentMessage, request.getPrompt(), debateClients);
+                runBroadcastTurnStreaming(emitter, emitLock, conversation, currentLeaf, debateClients,
+                        request.getResponseLength(), personaHints, 1, rounds);
+
+                // TUR 2..N
+                for (int round = 2; round <= rounds; round++) {
+                    String trigger = "🔁 Otomatik Tartışma - Tur " + round + "/" + rounds + ": Bir önceki turda " +
+                            "diğer modellerin verdiği cevapları dikkate alarak kendi pozisyonunu SAVUN, GELİŞTİR ya " +
+                            "da gerekiyorsa DEĞİŞTİR. Katılmadığın noktaları açıkça belirt, gerekirse yeni bir " +
+                            "sentez/uzlaşı öner.";
+                    currentLeaf = saveSystemTriggerMessage(conversation, currentLeaf, trigger);
+                    sendSseEvent(emitter, emitLock, "turn_message",
+                            Map.of("round", round, "totalRounds", rounds, "message", toMessageResponse(currentLeaf)));
+                    runBroadcastTurnStreaming(emitter, emitLock, conversation, currentLeaf, debateClients,
+                            request.getResponseLength(), personaHints, round, rounds);
+                }
+
+                // NİHAİ SENTEZ
+                String synthesisTrigger = "🏁 Nihai Sentez: Yukarıdaki " + rounds + " turluk tartışmayı özetle. " +
+                        "Modellerin hangi noktalarda hemfikir olduğunu, hangi noktalarda ayrıştığını kısaca belirt, " +
+                        "sonra kullanıcının ORİJİNAL sorusuna kendi nihai/dengeli önerini net biçimde ver.";
+                Message synthesisLeaf = saveSystemTriggerMessage(conversation, currentLeaf, synthesisTrigger);
+                sendSseEvent(emitter, emitLock, "synthesis_trigger",
+                        Map.of("message", toMessageResponse(synthesisLeaf)));
+
+                AiClient moderator = debateClients.get(0);
+                List<AiMessage> synthesisContext = buildContext(conversation, synthesisLeaf, moderator.getProvider(),
+                        request.getResponseLength(), null);
+                MessageResponse synthesisResponse = callProviderAndSave(moderator,
+                        AiRequest.builder().messages(synthesisContext).build(), conversation, synthesisLeaf);
+                sendSseEvent(emitter, emitLock, "synthesis", Map.of("message", synthesisResponse));
+
+                sendSseEvent(emitter, emitLock, "done", Map.of("conversationId", conversation.getId()));
+                emitter.complete();
+            } catch (Exception e) {
+                sendSseEvent(emitter, emitLock, "fatal_error", Map.of("message", String.valueOf(e.getMessage())));
+                emitter.completeWithError(e);
+            }
+        };
+
+        new Thread(task, "chat-debate-stream-" + System.currentTimeMillis()).start();
+        return emitter;
+    }
+
     // Sistem tarafından otomatik üretilen bir "tur tetikleyici" USER mesajı kaydeder (ör. "Tur 2/5").
     // Normal kullanıcı mesajlarıyla AYNI tabloda tutulur ki mevcut frontend (her kartın kendi SMS'imsi
     // geçmişi, ChatResponse/ConversationResponse şeması) HİÇBİR ek değişiklik gerektirmeden bunları da
@@ -441,9 +604,10 @@ public class ChatService {
                                 && m.getParentMessage().getId().equals(parentId))
                         .collect(Collectors.toList());
 
+        boolean isAlreadySelected = message.isSelected();
         List<Message> updated = new ArrayList<>();
         for (Message sibling : siblings) {
-            boolean shouldBeSelected = sibling.getId().equals(message.getId());
+            boolean shouldBeSelected = !isAlreadySelected && sibling.getId().equals(message.getId());
             if (sibling.isSelected() != shouldBeSelected) {
                 sibling.setSelected(shouldBeSelected);
                 updated.add(messageRepository.save(sibling));

@@ -9,7 +9,9 @@ import com.compareai.dto.response.ConversationSummaryResponse;
 import com.compareai.dto.response.MessageResponse;
 import com.compareai.service.ChatService;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -32,6 +34,15 @@ public class ChatController {
         return chatService.sendMessage(request);
     }
 
+    // STREAMING VERSİYON: sendMessage ile aynı işi yapar ama cevapları TEK bir toplu JSON yerine
+    // Server-Sent Events (SSE) ile parça parça gönderir - her sağlayıcı kendi cevabını bitirdiği
+    // an frontend'e ulaşır, hepsi aynı anda "birden bire dolmaz". Frontend axios yerine fetch +
+    // ReadableStream ile bu uç noktayı tüketir (bkz. frontend/src/services/sseStream.js).
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamMessage(@Valid @RequestBody ChatRequest request) {
+        return chatService.streamMessage(request);
+    }
+
     // OTOMATİK TARTIŞMA MODU: kullanıcı tek bir soru gönderir, seçili sağlayıcılar (varsayılan 5,
     // request.debateRounds ile 2-6 arası ayarlanabilir tur boyunca) kullanıcı müdahalesi olmadan
     // kendi aralarında tartışır, son turda bir moderatör nihai sentezi üretir. Dönen ConversationResponse
@@ -39,6 +50,15 @@ public class ChatController {
     @PostMapping("/debate")
     public ConversationResponse runAutoDebate(@Valid @RequestBody ChatRequest request) {
         return chatService.runAutoDebate(request);
+    }
+
+    // STREAMING VERSİYON: runAutoDebate ile aynı işi yapar (tek promptla N tur otomatik tartışma
+    // + nihai sentez) ama her turun her cevabı hazır olduğu anda ayrı bir SSE event'i olarak akar,
+    // ayrıca hangi turda olunduğunu bildiren "turn_message" event'leri de gönderir - böylece
+    // frontend "Tur 3/5 sürüyor..." gibi canlı bir ilerleme durumu gösterebilir.
+    @PostMapping(value = "/debate/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamAutoDebate(@Valid @RequestBody ChatRequest request) {
+        return chatService.streamAutoDebate(request);
     }
 
     // Dashboard'daki "Sohbet Geçmişi" listesi: bir kullanıcıya ait tüm konuşmaları

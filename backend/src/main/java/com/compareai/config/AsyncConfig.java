@@ -11,7 +11,9 @@ public class AsyncConfig {
 
     @Bean
     public Executor taskExecutor() {
-        return Executors.newFixedThreadPool(3);
+        // SSE streaming ile istekler daha uzun süre acik kalabiliyor (kullanicilar ayni anda
+        // birden fazla sohbet/tartisma baslatabilir), o yuzden havuzu biraz genislettik.
+        return Executors.newFixedThreadPool(6);
     }
 
 }
