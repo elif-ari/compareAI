@@ -284,6 +284,102 @@ const Chat = () => {
     printWindow.document.close();
   };
 
+  const handleExportSummaryPDF = () => {
+    if (!messages || messages.length === 0) {
+      alert("Dışa aktarılacak sohbet mesajı bulunamadı.");
+      return;
+    }
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      alert("Yazdırma penceresi açılamadı. Lütfen tarayıcınızın engelleyicisini kontrol edin.");
+      return;
+    }
+
+    const userMsgs = messages.filter((m) => m.role === "USER");
+    const originalQuestion = userMsgs[0]?.content || "Soru bulunamadı";
+
+    // En son konsensüs veya sentez mesajını bul
+    const consensusMsg = [...messages].reverse().find(
+      (m) => m.role === "ASSISTANT" && (m.content?.startsWith("[DEBATE_CONSENSUS]") || m.content?.startsWith("[KARŞILAŞTIRMA VE FARKLAR]"))
+    );
+
+    // Tur 1 cevaplarını bul
+    const firstTurnAiAnswers = userMsgs[0]
+      ? messages.filter((m) => m.role === "ASSISTANT" && m.parentMessageId === userMsgs[0].id && !m.content?.startsWith("["))
+      : [];
+
+    let htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>CompareAI - Nihai Özet Raporu</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 28px; color: #1e293b; line-height: 1.5; max-width: 850px; margin: 0 auto; }
+          h1 { color: #4338ca; border-bottom: 2px solid #6366f1; padding-bottom: 10px; margin-top: 0; font-size: 1.6rem; display: flex; align-items: center; justify-content: space-between; }
+          .badge { background: #6366f1; color: white; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; }
+          .meta { background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 16px; border-radius: 10px; font-size: 0.85rem; color: #475569; margin-bottom: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+          .question-box { background: #eef2ff; border-left: 4px solid #4338ca; color: #1e1b4b; padding: 14px 18px; border-radius: 8px; font-size: 1.05rem; font-weight: 600; margin-bottom: 24px; }
+          .summary-card { background: #ffffff; border: 1.5px solid #6366f1; border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 4px 14px rgba(99, 102, 241, 0.08); }
+          .summary-title { font-weight: 800; color: #3730a3; font-size: 1.15rem; margin-bottom: 12px; border-bottom: 1px solid #e0e7ff; padding-bottom: 8px; }
+          .first-answers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 24px; }
+          .first-answer-card { background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; font-size: 0.84rem; }
+          .first-answer-name { font-weight: 700; color: #0f172a; margin-bottom: 6px; }
+          .content-text { white-space: pre-wrap; font-size: 0.88rem; color: #334155; }
+        </style>
+      </head>
+      <body>
+        <h1><span>CompareAI Nihai Konsensüs Raporu</span> <span class="badge">Yönetici Özeti</span></h1>
+        <div class="meta">
+          <div><strong>Tarih:</strong> ${new Date().toLocaleString("tr-TR")}</div>
+          <div><strong>Sohbet Modu:</strong> ${mode === CHAT_MODES.COMPARE ? "Karşılaştırmalı & Tartışmalı" : "Bağımsız"}</div>
+          <div><strong>Seçili Modeller:</strong> ${providers.map((p) => p.name).join(", ")}</div>
+          <div><strong>Toplam Tartışma Turu:</strong> ${userMsgs.length} Tur</div>
+        </div>
+
+        <div class="question-box">❓ İncelenen Soru: ${escapeHtml(originalQuestion)}</div>
+
+        ${
+          consensusMsg
+            ? `<div class="summary-card">
+                <div class="summary-title">🏆 3 Modelin Akran Onaylı Ortak Kararı ve Nihai Cevabı</div>
+                <div class="content-text">${escapeHtml(consensusMsg.content.replace("[DEBATE_CONSENSUS]\n", "").replace("[KARŞILAŞTIRMA VE FARKLAR]\n", ""))}</div>
+              </div>`
+            : `<div class="summary-card"><div class="summary-title">Sentez henüz oluşturulmadı</div></div>`
+        }
+
+        <h3 style="color:#475569; font-size:0.95rem; margin-bottom:12px;">🤖 Modellerin İlk Yanıt Özetleri (Tur 1)</h3>
+        <div class="first-answers-grid">
+          ${firstTurnAiAnswers
+            .map((aiMsg) => {
+              const providerInfo = getProviderByBackendName(aiMsg.provider);
+              const pName = providerInfo ? providerInfo.name : aiMsg.provider || "Yapay Zeka";
+              const snippet = aiMsg.content ? aiMsg.content.slice(0, 350) + "..." : "";
+              return `
+                <div class="first-answer-card">
+                  <div class="first-answer-name">🤖 ${pName}</div>
+                  <div class="content-text">${escapeHtml(snippet)}</div>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 300);
+          }
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
   const expandedProvider = useMemo(
     () => providers.find((p) => p.id === expandedProviderId),
     [providers, expandedProviderId]
@@ -402,7 +498,10 @@ const Chat = () => {
           (m) =>
             m.role === "USER" &&
             !m.content?.startsWith("🏁 Nihai Sentez") &&
-            !m.content?.startsWith("🏆 NİHAİ KONSENSÜS")
+            !m.content?.startsWith("🏆 NİHAİ KONSENSÜS") &&
+            !m.content?.startsWith("🏆 NİHAİ KARAR VE SENTEZ") &&
+            !m.content?.startsWith("[INTERNAL_SYNTHESIS_DRAFT]") &&
+            !m.content?.startsWith("[INTERNAL_SYNTHESIS_REVIEW]")
         )
         .sort((a, b) => a.id - b.id);
 
@@ -806,11 +905,14 @@ const Chat = () => {
             </button>
             {showExportMenu && (
               <div className="export-menu" onClick={() => setShowExportMenu(false)}>
-                <button className="export-menu-item" onClick={handleExportMarkdown}>
-                  <FileText size={14} /> Markdown (.md) Olarak İndir
+                <button className="export-menu-item" onClick={handleExportSummaryPDF} title="Sadece Soru, Ortak Karar ve İlk Cevap Özetleri (2-3 Sayfa)">
+                  <Printer size={14} /> 📄 Nihai Özet Raporu (PDF - 2 Sayfa)
                 </button>
-                <button className="export-menu-item" onClick={handleExportPDF}>
-                  <Printer size={14} /> PDF Olarak Yazdır / İndir
+                <button className="export-menu-item" onClick={handleExportPDF} title="Tüm Turları ve Detaylı Tartışmaları İçeren Tam Döküm">
+                  <Printer size={14} /> 📑 Tam Sohbet Dökümü (PDF - Tüm Turlar)
+                </button>
+                <button className="export-menu-item" onClick={handleExportMarkdown}>
+                  <FileText size={14} /> 📝 Markdown (.md) Olarak İndir
                 </button>
               </div>
             )}

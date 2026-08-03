@@ -401,21 +401,22 @@ public class ChatService {
                             request.getResponseLength(), personaHints, round, rounds);
                 }
 
-                // NİHAİ SENTEZ & KONSENSÜS
-                String synthesisTrigger = "🏆 NİHAİ KARSEN VE SENTEZ: Yukarıdaki " + rounds + " turluk tartışmayı analiz et ve aşağıdaki FORMATTA yanıt üret:\n\n" +
+                // NİHAİ SENTEZ & KONSENSÜS (SÜPER HIZLI VE TEK BİRLEŞİK RAPOR)
+                String synthesisTrigger = "🏆 NİHAİ KARAR VE SENTEZ: Yukarıdaki " + rounds + " turluk tartışmayı ve 3 modelin görüşlerini analiz ederek aşağıdaki EXACT FORMATTA yanıt üret:\n\n" +
                         "[DEBATE_CONSENSUS]\n" +
-                        "# 🏆 3 Modelin Ortak Kararı ve Nihai Cevabı\n\n" +
-                        "### 📊 Modeller Fikirlerini Nasıl Değiştirdi?\n" +
-                        "- **ChatGPT:** (Nasıl yaklaştı, nerede sabit kaldı veya esnedi?)\n" +
-                        "- **Claude:** (Neden katıldı / katılmadı, neye itiraz etti?)\n" +
-                        "- **Gemini:** (Görüşü nasıl evrildi, neden fikir değiştirdi?)\n\n" +
+                        "# 🏆 3 Modelin Ortak Katılımıyla Oluşturulmuş Nihai Sentez ve Cevap\n\n" +
+                        "### 📊 Modeller Fikirlerini Nasıl Değiştirdi ve Uzlaştı?\n" +
+                        "- **ChatGPT:** (Tartışmadaki tutumu, nerede esnedi veya katıldı?)\n" +
+                        "- **Claude:** (Neden katıldı / katılmadı, hangi nüansı ekledi?)\n" +
+                        "- **Gemini:** (Görüşü nasıl evrildi, nerede mutabık kaldı?)\n\n" +
                         "### 🤝 Modellerin Tam Anlaştığı Noktalar\n" +
                         "1. (Tüm modellerin mutabık kaldığı 1. nokta)\n" +
                         "2. (Tüm modellerin mutabık kaldığı 2. nokta)\n\n" +
-                        "### ⚡ Farklı Düşünülen Noktalar\n" +
-                        "- (Hangi model hangi detayda farklı düşünüyor?)\n\n" +
-                        "### 💡 Ortak Tavsiye ve Yanıt (Nihai Cevap)\n" +
-                        "(Kullanıcının orijinal sorusuna 3 modelin ortak aklından süzülen eksiksiz, en kaliteli nihai yanıt)";
+                        "### ⚡ Farklı Düşünülen Nüanslar\n" +
+                        "- (Hangi model hangi detayda farklı bir vurgu yapıyor?)\n\n" +
+                        "### 💡 Ortak Tavsiye ve Yanıt (3 Modelin Ortak Aklı)\n" +
+                        "(Kullanıcının sorusuna 3 modelin ortak katılımından ve tartışmasından süzülen eksiksiz, en kaliteli nihai yanıt)";
+
                 Message synthesisLeaf = saveSystemTriggerMessage(conversation, currentLeaf, synthesisTrigger);
                 sendSseEvent(emitter, emitLock, "synthesis_trigger",
                         Map.of("message", toMessageResponse(synthesisLeaf)));
@@ -425,8 +426,8 @@ public class ChatService {
                         request.getResponseLength(), null);
                 MessageResponse synthesisResponse = callProviderAndSave(moderator,
                         AiRequest.builder().messages(synthesisContext).build(), conversation, synthesisLeaf);
-                sendSseEvent(emitter, emitLock, "synthesis", Map.of("message", synthesisResponse));
 
+                sendSseEvent(emitter, emitLock, "synthesis", Map.of("message", synthesisResponse));
                 sendSseEvent(emitter, emitLock, "done", Map.of("conversationId", conversation.getId()));
                 emitter.complete();
             } catch (Exception e) {
@@ -614,8 +615,8 @@ public class ChatService {
             runBroadcastTurn(conversation, currentLeaf, debateClients, request.getResponseLength(), finalPersonaHints);
         }
 
-        // NİHAİ SENTEZ & KONSENSÜS
-        String synthesisTrigger = "🏆 NİHAİ KARAR VE SENTEZ: Yukarıdaki " + rounds + " turluk tartışmayı analiz et ve aşağıdaki FORMATTA yanıt üret:\n\n" +
+        // NİHAİ SENTEZ & KONSENSÜS (HIZLI VE TEMİZ KONSENSÜS RAPORU)
+        String synthesisTrigger = "🏆 NİHAİ KARAR VE SENTEZ: Yukarıdaki " + rounds + " turluk tartışmayı analiz et ve aşağıdaki EXACT FORMATTA yanıt üret:\n\n" +
                 "[DEBATE_CONSENSUS]\n" +
                 "# 🏆 3 Modelin Ortak Kararı ve Nihai Cevabı\n\n" +
                 "### 📊 Modeller Fikirlerini Nasıl Değiştirdi?\n" +
@@ -628,15 +629,45 @@ public class ChatService {
                 "### ⚡ Farklı Düşünülen Noktalar\n" +
                 "- (Hangi model hangi detayda farklı düşünüyor?)\n\n" +
                 "### 💡 Ortak Tavsiye ve Yanıt (Nihai Cevap)\n" +
-                "(Kullanıcının orijinal sorusuna 3 modelin ortak aklından süzülen eksiksiz, en kaliteli nihai yanıt)";
-        Message synthesisLeaf = saveSystemTriggerMessage(conversation, currentLeaf, synthesisTrigger);
+                "(Kullanıcının orijinal sorusuna 3 modelin ortak aklından ve tartışmasından süzülen eksiksiz, en kaliteli nihai yanıt)";
 
-        AiClient moderator = debateClients.get(0);
-        List<AiMessage> synthesisContext = buildContext(conversation, synthesisLeaf, moderator.getProvider(),
-                request.getResponseLength(), null);
-        callProviderAndSave(moderator,
-                AiRequest.builder().messages(synthesisContext).build(),
-                conversation, synthesisLeaf);
+        // NİHAİ SENTEZ & KONSENSÜS (ARKA PLANDA 3 MODELLİ AKRAN İNCELEMESİ VE MÜHÜRLEME)
+        Message synthesisLeaf = currentLeaf;
+        int numClients = debateClients.size();
+
+        for (int i = 0; i < numClients; i++) {
+            AiClient currentReviewer = debateClients.get(i);
+            boolean isFinalSeal = (i == numClients - 1);
+
+            String reviewTrigger;
+            if (i == 0) {
+                reviewTrigger = "[INTERNAL_SYNTHESIS_DRAFT] 1. MODEL SENTEZ TASLAĞI: Yukarıdaki " + rounds + " turluk tartışmayı analiz et ve ilk sentez taslağını oluştur.";
+            } else if (!isFinalSeal) {
+                reviewTrigger = "[INTERNAL_SYNTHESIS_REVIEW] " + (i + 1) + ". MODEL İNCELEMESİ VE DÜZELTME: İlk modelin hazırladığı sentez taslağını ve tüm tartışmayı incele. Varsa eksikleri tamamla, kendi perspektifini de ekleyerek daha güçlü ve doğru bir revize sentez sun.";
+            } else {
+                reviewTrigger = "🏆 NİHAİ KARAR VE SENTEZ (3 MODELİN ORTAK AKLI VE MÜHÜRÜ): Önceki modellerin sentez taslaklarını ve tüm tartışmayı denetle. 3 modelin de tam mutabık kaldığı ve onayladığı nihai kararı aşağıdaki EXACT FORMATTA yayınla:\n\n" +
+                        "[DEBATE_CONSENSUS]\n" +
+                        "# 🏆 3 Modelin Ortak Katılımıyla Oluşturulmuş Nihai Sentez ve Cevap\n\n" +
+                        "### 📊 Modeller Fikirlerini Nasıl Değiştirdi ve Uzlaştı?\n" +
+                        "- **ChatGPT:** (Tartışmadaki tutumu, nerede esnedi veya katıldı?)\n" +
+                        "- **Claude:** (Neden katıldı / katılmadı, hangi nüansı ekledi?)\n" +
+                        "- **Gemini:** (Görüşü nasıl evrildi, nerede mutabık kaldı?)\n\n" +
+                        "### 🤝 Modellerin Tam Anlaştığı Noktalar\n" +
+                        "1. (Tüm modellerin mutabık kaldığı 1. nokta)\n" +
+                        "2. (Tüm modellerin mutabık kaldığı 2. nokta)\n\n" +
+                        "### ⚡ Farklı Düşünülen Nüanslar\n" +
+                        "- (Hangi model hangi detayda farklı bir vurgu yapıyor?)\n\n" +
+                        "### 💡 Ortak Tavsiye ve Yanıt (3 Modelin Ortak Aklı)\n" +
+                        "(Kullanıcının sorusuna 3 modelin aktif katılımından ve denetiminden süzülen eksiksiz, en kaliteli nihai yanıt)";
+            }
+
+            synthesisLeaf = saveSystemTriggerMessage(conversation, synthesisLeaf, reviewTrigger);
+            List<AiMessage> synthesisContext = buildContext(conversation, synthesisLeaf, currentReviewer.getProvider(),
+                    request.getResponseLength(), null);
+            callProviderAndSave(currentReviewer,
+                    AiRequest.builder().messages(synthesisContext).build(),
+                    conversation, synthesisLeaf);
+        }
 
         return toConversationResponse(conversation);
     }
